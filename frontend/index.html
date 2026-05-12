@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+    <!-- PWA 相关 meta 标签 -->
+    <meta name="theme-color" content="#1890ff" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="AI量化训练" />
+    <meta name="application-name" content="AI量化训练" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="msapplication-TileColor" content="#1890ff" />
+    <meta name="msapplication-tap-highlight" content="no" />
+
+    <!-- iOS 安全区域适配 -->
+    <meta name="viewport-fit" content="cover" />
+
+    <title>A股预测训练平台</title>
+
+    <style>
+      /* PWA 启动闪屏 */
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #f0f2f5;
+      }
+      #app-loading {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+        z-index: 9999;
+        transition: opacity 0.3s ease-out;
+      }
+      #app-loading.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #app-loading .logo {
+        width: 80px;
+        height: 80px;
+        border-radius: 20px;
+        background: rgba(255,255,255,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 20px;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      #app-loading .logo-text {
+        font-size: 36px;
+        color: white;
+        font-weight: bold;
+      }
+      #app-loading .title {
+        color: white;
+        font-size: 20px;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      #app-loading .subtitle {
+        color: rgba(255,255,255,0.7);
+        font-size: 14px;
+      }
+      #app-loading .spinner {
+        margin-top: 30px;
+        width: 30px;
+        height: 30px;
+        border: 3px solid rgba(255,255,255,0.3);
+        border-top-color: white;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- PWA 启动闪屏 -->
+    <div id="app-loading">
+      <div class="logo">
+        <span class="logo-text">AI</span>
+      </div>
+      <div class="title">A股预测训练平台</div>
+      <div class="subtitle">正在加载...</div>
+      <div class="spinner"></div>
+    </div>
+
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // 应用加载完成后移除闪屏
+      window.addEventListener('load', function() {
+        setTimeout(function() {
+          var loading = document.getElementById('app-loading');
+          if (loading) {
+            loading.classList.add('fade-out');
+            setTimeout(function() {
+              loading.remove();
+            }, 300);
+          }
+        }, 500);
+      });
+    </script>
+  </body>
+</html>

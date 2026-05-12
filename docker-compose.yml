@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../Dockerfile
+    container_name: a_stock_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+    environment:
+      - DEBUG=False
+      - DATABASE_URL=sqlite:///./a_stock_trainer.db
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+    restart: unless-stopped
+    networks:
+      - a_stock_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: a_stock_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=http://backend:8000/api
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - a_stock_network
+
+networks:
+  a_stock_network:
+    driver: bridge
