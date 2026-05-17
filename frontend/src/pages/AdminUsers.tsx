@@ -67,7 +67,7 @@ const AdminUsers: React.FC = () => {
   const fetchUsers = async () => {
     setLoading(true)
     try {
-      const data = await adminApi.listUsers()
+      const data: any = await adminApi.listUsers()
       setUsers(data)
     } catch (error: any) {
       if (error?.response?.status === 403) {

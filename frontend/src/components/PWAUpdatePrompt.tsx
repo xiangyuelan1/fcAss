@@ -32,7 +32,7 @@ const PWAUpdatePrompt: React.FC = () => {
 
   const handleUpdate = () => {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getController()?.postMessage({ type: 'SKIP_WAITING' })
+      navigator.serviceWorker.controller?.postMessage({ type: 'SKIP_WAITING' })
     }
     setShowUpdate(false)
     // 延迟刷新，等待新 SW 激活

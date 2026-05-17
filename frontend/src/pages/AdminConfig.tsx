@@ -21,11 +21,9 @@ import {
   EditOutlined,
   DeleteOutlined,
   ReloadOutlined,
-  SettingOutlined,
   ExperimentOutlined,
   ThunderboltOutlined,
   AppstoreOutlined,
-  CopyOutlined,
 } from '@ant-design/icons'
 import { adminApi } from '@/services/api'
 import { SystemConfigItem } from '@/types'
@@ -47,7 +45,7 @@ const AdminConfig: React.FC = () => {
   const fetchConfigs = async () => {
     setLoading(true)
     try {
-      const data = await adminApi.listConfigs()
+      const data: any = await adminApi.listConfigs()
       setConfigs(data)
     } catch (error: any) {
       if (error?.response?.status === 403) {
@@ -138,24 +136,6 @@ const AdminConfig: React.FC = () => {
     }
   }
 
-  const getCategoryIcon = (category: string) => {
-    switch (category) {
-      case 'model_type': return <ExperimentOutlined />
-      case 'algorithm': return <ThunderboltOutlined />
-      case 'param_template': return <AppstoreOutlined />
-      default: return <SettingOutlined />
-    }
-  }
-
-  const getCategoryName = (category: string) => {
-    switch (category) {
-      case 'model_type': return '模型类型'
-      case 'algorithm': return '算法配置'
-      case 'param_template': return '参数模板'
-      default: return category
-    }
-  }
-
   const getColumns = () => [
     {
       title: '名称',
@@ -179,7 +159,7 @@ const AdminConfig: React.FC = () => {
       dataIndex: 'value',
       key: 'value',
       width: 300,
-      render: (value: Record<string, any>, record: SystemConfigItem) => (
+      render: (value: Record<string, any>, _record: SystemConfigItem) => (
         <Tooltip title={<pre style={{ margin: 0, fontSize: 11 }}>{JSON.stringify(value, null, 2)}</pre>}>
           <code style={{ background: '#f5f5f5', padding: '2px 6px', borderRadius: 4, fontSize: 12, maxWidth: 280, display: 'inline-block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {JSON.stringify(value)}

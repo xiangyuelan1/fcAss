@@ -3,7 +3,6 @@ import { Button, Modal, Typography, Space, Tag } from 'antd'
 import {
   MobileOutlined,
   DownloadOutlined,
-  ReloadOutlined,
   ChromeOutlined,
   AppleOutlined,
   AndroidOutlined,
