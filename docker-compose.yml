@@ -4,21 +4,29 @@ services:
   backend:
     build:
       context: ./backend
-      dockerfile: ../Dockerfile
+      dockerfile: Dockerfile
     container_name: a_stock_backend
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./models:/app/models
-      - ./logs:/app/logs
+      - backend_data:/app/data
+      - backend_models:/app/models
+      - backend_logs:/app/logs
+      - backend_db:/app/db
     environment:
       - DEBUG=False
-      - DATABASE_URL=sqlite:///./a_stock_trainer.db
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - DATABASE_URL=sqlite:///./db/a_stock_trainer.db
+      - SECRET_KEY=${SECRET_KEY:-please-change-this-secret-key-in-production}
+      - MODEL_DIR=/app/models
+      - DATA_DIR=/app/data
+      - LOG_DIR=/app/logs
     restart: unless-stopped
-    networks:
-      - a_stock_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   frontend:
     build:
@@ -26,15 +34,14 @@ services:
       dockerfile: Dockerfile
     container_name: a_stock_frontend
     ports:
-      - "3000:3000"
-    environment:
-      - VITE_API_BASE_URL=http://backend:8000/api
+      - "80:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
-    networks:
-      - a_stock_network
 
-networks:
-  a_stock_network:
-    driver: bridge
+volumes:
+  backend_data:
+  backend_models:
+  backend_logs:
+  backend_db:

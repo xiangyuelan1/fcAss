@@ -70,7 +70,7 @@ class DataService:
         """
         def _notify(stage, progress, message, **data):
             if progress_callback:
-                progress_callback(stage, progress, message, data)
+                progress_callback(stage, progress, message, **data)
 
         _notify('init', 5, f'正在初始化股票 {code}...')
 

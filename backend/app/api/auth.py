@@ -1,9 +1,9 @@
 """
 认证API
 """
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -51,7 +51,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     db_user = UserModel(
         username=user_data.username,
         email=user_data.email,
-        hashed_password=hashed_password
+        hashed_password=hashed_password,
     )
     db.add(db_user)
     db.commit()
@@ -62,6 +62,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/token", response_model=Token)
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
@@ -73,6 +74,12 @@ async def login(
             detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    user.last_login_at = datetime.now(timezone.utc)
+    forwarded = request.headers.get("x-forwarded-for")
+    user.last_login_ip = forwarded.split(",")[0].strip() if forwarded else request.client.host if request.client else None
+    user.last_heartbeat = datetime.now(timezone.utc)
+    db.commit()
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
@@ -150,3 +157,26 @@ async def delete_account(
     db.delete(current_user)
     db.commit()
     return {"success": True, "message": "账户已删除"}
+
+
+@router.post("/heartbeat")
+async def heartbeat(
+    request: Request,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """用户心跳，用于在线状态追踪"""
+    current_user.last_heartbeat = datetime.now(timezone.utc)
+    db.commit()
+    return {"success": True}
+
+
+@router.get("/online-count")
+async def get_online_count(db: Session = Depends(get_db)):
+    """获取当前在线用户数（5分钟内有心跳的视为在线）"""
+    threshold = datetime.now(timezone.utc) - timedelta(minutes=5)
+    count = db.query(UserModel).filter(
+        UserModel.last_heartbeat >= threshold,
+        UserModel.is_active == True
+    ).count()
+    return {"online_count": count}

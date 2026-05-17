@@ -12,7 +12,7 @@ class UserModel(Base):
     __tablename__ = "user_models"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, default=1, comment="用户ID")  # MVP版本默认用户
+    user_id = Column(Integer, default=None, nullable=True, comment="用户ID")
     name = Column(String(100), nullable=False, comment="模型名称")
     description = Column(Text, comment="模型描述")
     
@@ -52,7 +52,7 @@ class UserModel(Base):
             "name": self.name,
             "description": self.description,
             "model_type": self.model_type,
-            "model_config": self.model_config,
+            "model_params": self.model_config,
             "features": self.features,
             "feature_config": self.feature_config,
             "target": self.target,

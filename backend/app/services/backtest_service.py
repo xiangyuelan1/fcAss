@@ -17,6 +17,7 @@ except ImportError:
     torch = None
 
 from app.models.training import TrainingTask, BacktestResult
+from app.models.user_model import UserModel
 from app.services.feature_service import FeatureService
 from app.services.data_service import DataService
 from app.services.training_service import ModelCheckpoint
@@ -35,10 +36,16 @@ class BacktestService:
         self,
         task_id: Optional[int] = None,
         skip: int = 0,
-        limit: int = 100
+        limit: int = 100,
+        user_id: Optional[int] = None
     ) -> List[BacktestResult]:
-        """获取回测结果列表"""
+        """获取回测结果列表，按 user_id 过滤时通过 join TrainingTask -> UserModel 实现"""
         query = self.db.query(BacktestResult)
+        
+        if user_id is not None:
+            query = query.join(TrainingTask, BacktestResult.task_id == TrainingTask.id).join(
+                UserModel, TrainingTask.model_id == UserModel.id
+            ).filter(UserModel.user_id == user_id)
         
         if task_id:
             query = query.filter(BacktestResult.task_id == task_id)
@@ -167,6 +174,14 @@ class BacktestService:
         
         # 对每个股票进行回测
         for code in stock_codes:
+            # 自动获取缺失的股票数据（共享缓存+动态获取）
+            existing_prices = self.data_service.get_stock_prices(code=code, limit=1)
+            if len(existing_prices) == 0:
+                try:
+                    result = self.data_service.fetch_stock_data(code)
+                except Exception:
+                    pass
+
             # 获取回测期间数据
             prices = self.data_service.get_stock_prices(
                 code=code,

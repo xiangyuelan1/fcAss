@@ -5,6 +5,7 @@ import {
   Select,
   Button,
   Tag,
+  Space,
   message,
   Row,
   Col,
@@ -13,6 +14,7 @@ import {
   Alert,
   Spin,
   Table,
+  Collapse,
 } from 'antd'
 import {
   ThunderboltOutlined,
@@ -20,9 +22,22 @@ import {
   ArrowDownOutlined,
   MinusOutlined,
   RobotOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons'
 import { predictionApi, trainingApi, modelApi } from '@/services/api'
 import { TrainingTask, UserModel } from '@/types'
+
+interface PredictionRecord {
+  task_id: number
+  stock_code: string
+  predict_date: string
+  prediction: number
+  prediction_label: string
+  latest_data?: { date: string; close: number; volume?: number }
+  model_name: string
+  model_type: string
+  timestamp: number
+}
 
 const Prediction: React.FC = () => {
   const [searchParams] = useSearchParams()
@@ -37,9 +52,10 @@ const Prediction: React.FC = () => {
   const [predictableStocks, setPredictableStocks] = useState<{ code: string; name: string }[]>([])
   const [selectedStock, setSelectedStock] = useState<string | undefined>()
   const [predicting, setPredicting] = useState(false)
-  const [predictionResult, setPredictionResult] = useState<any>(null)
   const [batchResults, setBatchResults] = useState<any[]>([])
   const [batchPredicting, setBatchPredicting] = useState(false)
+
+  const [historyRecords, setHistoryRecords] = useState<PredictionRecord[]>([])
 
   useEffect(() => {
     fetchCompletedTasks()
@@ -49,15 +65,13 @@ const Prediction: React.FC = () => {
   useEffect(() => {
     if (selectedTaskId) {
       fetchPredictableStocks(selectedTaskId)
-      setPredictionResult(null)
-      setBatchResults([])
     }
   }, [selectedTaskId])
 
   const fetchCompletedTasks = async () => {
     try {
       const data: any = await trainingApi.getTasks({ status: 'completed' })
-      setTasks(data)
+      setTasks(data?.items || (Array.isArray(data) ? data : []))
     } catch (error) {
       message.error('获取训练任务失败')
     }
@@ -66,8 +80,9 @@ const Prediction: React.FC = () => {
   const fetchModels = async () => {
     try {
       const data: any = await modelApi.getModels()
+      const models = data?.items || (Array.isArray(data) ? data : [])
       const modelMap: Record<number, UserModel> = {}
-      data.forEach((model: UserModel) => {
+      models.forEach((model: UserModel) => {
         modelMap[model.id] = model
       })
       setModels(modelMap)
@@ -80,12 +95,29 @@ const Prediction: React.FC = () => {
     try {
       const data: any = await predictionApi.getPredictableStocks(taskId)
       setPredictableStocks(data.stocks || [])
-      if (data.stocks?.length > 0) {
+      if (data.stocks?.length > 0 && !selectedStock) {
         setSelectedStock(data.stocks[0].code)
       }
     } catch (error) {
       message.error('获取可预测股票失败')
     }
+  }
+
+  const addRecord = (result: any, taskId: number) => {
+    const task = tasks.find((t) => t.id === taskId)
+    const model = task ? models[task.model_id] : null
+    const record: PredictionRecord = {
+      task_id: taskId,
+      stock_code: result.stock_code,
+      predict_date: result.predict_date,
+      prediction: result.prediction,
+      prediction_label: result.prediction_label,
+      latest_data: result.latest_data,
+      model_name: model ? model.name : `模型#${task?.model_id}`,
+      model_type: model?.model_type || '',
+      timestamp: Date.now(),
+    }
+    setHistoryRecords((prev) => [record, ...prev])
   }
 
   const handlePredict = async () => {
@@ -94,13 +126,12 @@ const Prediction: React.FC = () => {
       return
     }
     setPredicting(true)
-    setPredictionResult(null)
     try {
       const data: any = await predictionApi.predict({
         task_id: selectedTaskId,
         stock_code: selectedStock,
       })
-      setPredictionResult(data)
+      addRecord(data, selectedTaskId)
     } catch (error: any) {
       const detail = error?.response?.data?.detail
       if (typeof detail === 'string') {
@@ -126,7 +157,13 @@ const Prediction: React.FC = () => {
         task_id: selectedTaskId,
         stock_codes: codes,
       })
-      setBatchResults(data.predictions || [])
+      const predictions = data.predictions || []
+      setBatchResults(predictions)
+      predictions.forEach((p: any) => {
+        if (!p.error) {
+          addRecord({ ...p, predict_date: new Date().toISOString().slice(0, 10) }, selectedTaskId)
+        }
+      })
     } catch (error: any) {
       const detail = error?.response?.data?.detail
       if (typeof detail === 'string') {
@@ -139,6 +176,10 @@ const Prediction: React.FC = () => {
     }
   }
 
+  const handleClearHistory = () => {
+    setHistoryRecords([])
+  }
+
   const getLabelStyle = (label: string) => {
     if (label === '看涨') return { color: '#f5222d', icon: <ArrowUpOutlined />, bg: '#fff1f0' }
     if (label === '看跌') return { color: '#52c41a', icon: <ArrowDownOutlined />, bg: '#f6ffed' }
@@ -147,6 +188,13 @@ const Prediction: React.FC = () => {
 
   const selectedTask = tasks.find((t) => t.id === selectedTaskId)
   const selectedModel = selectedTask ? models[selectedTask.model_id] : null
+
+  const groupedRecords = historyRecords.reduce<Record<string, PredictionRecord[]>>((acc, rec) => {
+    const key = rec.stock_code
+    if (!acc[key]) acc[key] = []
+    acc[key].push(rec)
+    return acc
+  }, {})
 
   const batchColumns = [
     {
@@ -195,6 +243,8 @@ const Prediction: React.FC = () => {
         ),
     },
   ]
+
+  const latestResult = historyRecords.length > 0 ? historyRecords[0] : null
 
   return (
     <div>
@@ -252,7 +302,7 @@ const Prediction: React.FC = () => {
               filterOption={(input, option) =>
                 (option?.children as unknown as string)?.toLowerCase().includes(input.toLowerCase()) ?? false
               }
-              dropdownRender={(menu) => (
+              popupRender={(menu) => (
                 <>
                   {menu}
                   <div style={{ padding: '8px 12px', borderTop: '1px solid #f0f0f0', color: '#999', fontSize: 12 }}>
@@ -305,23 +355,23 @@ const Prediction: React.FC = () => {
         </div>
       </Card>
 
-      {/* 单只股票预测结果 */}
-      {predictionResult && (
-        <Card title="预测结果" style={{ marginBottom: 24 }}>
+      {/* 最新预测结果 */}
+      {latestResult && (
+        <Card title="最新预测结果" style={{ marginBottom: 24 }}>
           <Row gutter={[16, 16]}>
             <Col xs={24} md={8}>
               <Card
                 style={{
-                  background: getLabelStyle(predictionResult.prediction_label).bg,
+                  background: getLabelStyle(latestResult.prediction_label).bg,
                   textAlign: 'center',
                 }}
               >
                 <Statistic
                   title="预测方向"
-                  value={predictionResult.prediction_label}
-                  prefix={getLabelStyle(predictionResult.prediction_label).icon}
+                  value={latestResult.prediction_label}
+                  prefix={getLabelStyle(latestResult.prediction_label).icon}
                   valueStyle={{
-                    color: getLabelStyle(predictionResult.prediction_label).color,
+                    color: getLabelStyle(latestResult.prediction_label).color,
                     fontSize: 32,
                   }}
                 />
@@ -331,10 +381,10 @@ const Prediction: React.FC = () => {
               <Card>
                 <Statistic
                   title="预测值"
-                  value={predictionResult.prediction}
+                  value={latestResult.prediction}
                   precision={6}
                   valueStyle={{
-                    color: predictionResult.prediction > 0 ? '#f5222d' : '#52c41a',
+                    color: latestResult.prediction > 0 ? '#f5222d' : '#52c41a',
                   }}
                 />
               </Card>
@@ -343,12 +393,12 @@ const Prediction: React.FC = () => {
               <Card>
                 <Statistic
                   title="最新收盘价"
-                  value={predictionResult.latest_data?.close || 0}
+                  value={latestResult.latest_data?.close || 0}
                   prefix="¥"
                   precision={2}
                 />
                 <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
-                  数据日期: {predictionResult.latest_data?.date || '-'}
+                  数据日期: {latestResult.latest_data?.date || '-'}
                 </div>
               </Card>
             </Col>
@@ -358,15 +408,15 @@ const Prediction: React.FC = () => {
             style={{ marginTop: 16 }}
             message="预测说明"
             description={
-              predictionResult.prediction_label === '看涨'
-                ? `模型预测 ${predictionResult.stock_code} 短期有上涨趋势，预测值为 ${predictionResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
-                : predictionResult.prediction_label === '看跌'
-                ? `模型预测 ${predictionResult.stock_code} 短期有下跌趋势，预测值为 ${predictionResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
-                : `模型预测 ${predictionResult.stock_code} 短期走势震荡，预测值为 ${predictionResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+              latestResult.prediction_label === '看涨'
+                ? `模型预测 ${latestResult.stock_code} 短期有上涨趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+                : latestResult.prediction_label === '看跌'
+                ? `模型预测 ${latestResult.stock_code} 短期有下跌趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+                : `模型预测 ${latestResult.stock_code} 短期走势震荡，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
             }
             type={
-              predictionResult.prediction_label === '看涨' ? 'success' :
-              predictionResult.prediction_label === '看跌' ? 'warning' : 'info'
+              latestResult.prediction_label === '看涨' ? 'success' :
+              latestResult.prediction_label === '看跌' ? 'warning' : 'info'
             }
             showIcon
           />
@@ -388,6 +438,87 @@ const Prediction: React.FC = () => {
             message="以上预测结果仅供参考，不构成任何投资建议。股市有风险，投资需谨慎。"
             type="warning"
             showIcon
+          />
+        </Card>
+      )}
+
+      {/* 历史预测结果（按股票分组） */}
+      {historyRecords.length > 0 && (
+        <Card
+          title={`预测历史（共 ${historyRecords.length} 条）`}
+          extra={
+            <Button size="small" danger icon={<DeleteOutlined />} onClick={handleClearHistory}>
+              清空
+            </Button>
+          }
+          style={{ marginBottom: 24 }}
+        >
+          <Collapse
+            items={Object.entries(groupedRecords).map(([stockCode, records]) => ({
+              key: stockCode,
+              label: (
+                <Space>
+                  <span style={{ fontWeight: 600 }}>{stockCode}</span>
+                  <Tag>{records.length} 条预测</Tag>
+                  {records.length > 0 && (() => {
+                    const latest = records[0]
+                    const style = getLabelStyle(latest.prediction_label)
+                    return (
+                      <Tag color={style.color === '#f5222d' ? 'red' : style.color === '#52c41a' ? 'green' : 'gold'}>
+                        最新: {latest.prediction_label}
+                      </Tag>
+                    )
+                  })()}
+                </Space>
+              ),
+              children: (
+                <Table
+                  size="small"
+                  pagination={false}
+                  dataSource={records}
+                  rowKey="timestamp"
+                  columns={[
+                    {
+                      title: '模型',
+                      key: 'model',
+                      render: (_: any, r: PredictionRecord) => (
+                        <span>{r.model_name} <Tag>{r.model_type.toUpperCase()}</Tag></span>
+                      ),
+                    },
+                    {
+                      title: '预测方向',
+                      dataIndex: 'prediction_label',
+                      key: 'prediction_label',
+                      render: (label: string) => {
+                        const style = getLabelStyle(label)
+                        return (
+                          <Tag color={style.color === '#f5222d' ? 'red' : style.color === '#52c41a' ? 'green' : 'gold'} icon={style.icon}>
+                            {label}
+                          </Tag>
+                        )
+                      },
+                    },
+                    {
+                      title: '预测值',
+                      dataIndex: 'prediction',
+                      key: 'prediction',
+                      render: (val: number) => val.toFixed(6),
+                    },
+                    {
+                      title: '收盘价',
+                      key: 'close',
+                      render: (_: any, r: PredictionRecord) =>
+                        r.latest_data?.close ? `¥${r.latest_data.close.toFixed(2)}` : '-',
+                    },
+                    {
+                      title: '预测时间',
+                      key: 'time',
+                      render: (_: any, r: PredictionRecord) => new Date(r.timestamp).toLocaleString(),
+                    },
+                  ]}
+                />
+              ),
+            }))}
           />
         </Card>
       )}

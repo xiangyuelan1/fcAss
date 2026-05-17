@@ -12,6 +12,7 @@ import {
   Row,
   Col,
   Statistic,
+  Segmented,
 } from 'antd'
 import {
   PlusOutlined,
@@ -22,29 +23,48 @@ import {
   RobotOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  PushpinOutlined,
+  PushpinFilled,
+  HeartOutlined,
+  HeartFilled,
+  SendOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { modelApi, trainingApi } from '@/services/api'
+import { modelApi, trainingApi, communityApi } from '@/services/api'
 import { UserModel } from '@/types'
 
 const ModelList: React.FC = () => {
   const navigate = useNavigate()
   const [models, setModels] = useState<UserModel[]>([])
   const [loading, setLoading] = useState(false)
+  const [filter, setFilter] = useState<string>('全部')
+  const [publishedModelIds, setPublishedModelIds] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     fetchModels()
+    fetchPublishedModelIds()
   }, [])
 
   const fetchModels = async () => {
     setLoading(true)
     try {
-      const data = await modelApi.getModels()
-      setModels(data)
+      const data: any = await modelApi.getModels()
+      setModels(data?.items || (Array.isArray(data) ? data : []))
     } catch (error) {
       message.error('获取模型列表失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchPublishedModelIds = async () => {
+    try {
+      const data: any = await communityApi.getModels({ page_size: 100 })
+      const items = data?.items || (Array.isArray(data) ? data : [])
+      const ids = new Set<number>(items.map((m: any) => m.source_model_id as number).filter(Boolean))
+      setPublishedModelIds(ids)
+    } catch {
+      // 静默处理：发布状态获取失败不影响主流程
     }
   }
 
@@ -83,6 +103,55 @@ const ModelList: React.FC = () => {
     }
   }
 
+  const handlePin = async (model: UserModel) => {
+    try {
+      if (model.is_pinned) {
+        await modelApi.unpinModel(model.id)
+        message.success('已取消置顶')
+      } else {
+        await modelApi.pinModel(model.id)
+        message.success('已置顶')
+      }
+      fetchModels()
+    } catch (error) {
+      message.error('操作失败')
+    }
+  }
+
+  const handleFavorite = async (model: UserModel) => {
+    try {
+      if (model.is_favorited) {
+        await modelApi.unfavoriteModel(model.id)
+        message.success('已取消收藏')
+      } else {
+        await modelApi.favoriteModel(model.id)
+        message.success('已收藏')
+      }
+      fetchModels()
+    } catch (error) {
+      message.error('操作失败')
+    }
+  }
+
+  const handlePublish = async (model: UserModel) => {
+    try {
+      await communityApi.publishModel({
+        model_id: model.id,
+        description: model.description || '',
+      })
+      message.success('发布到社区成功，+10积分')
+      fetchModels()
+      fetchPublishedModelIds()
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      if (detail) {
+        message.error(detail)
+      } else {
+        message.error('发布失败')
+      }
+    }
+  }
+
   const getStatusBadge = (status: string) => {
     const statusMap: Record<string, { status: string; text: string }> = {
       draft: { status: 'default', text: '草稿' },
@@ -105,14 +174,48 @@ const ModelList: React.FC = () => {
     return <Tag color={colors[type] || 'default'}>{type.toUpperCase()}</Tag>
   }
 
+  const filteredModels = models.filter((m) => {
+    if (filter === '收藏') return m.is_favorited
+    if (filter === '置顶') return m.is_pinned
+    return true
+  })
+
   const columns = [
+    {
+      title: '',
+      key: 'actions_quick',
+      width: 80,
+      render: (_: any, record: UserModel) => (
+        <Space size={0}>
+          <Tooltip title={record.is_pinned ? '取消置顶' : '置顶'}>
+            <Button
+              type="text"
+              size="small"
+              icon={record.is_pinned ? <PushpinFilled style={{ color: '#1890ff' }} /> : <PushpinOutlined />}
+              onClick={() => handlePin(record)}
+            />
+          </Tooltip>
+          <Tooltip title={record.is_favorited ? '取消收藏' : '收藏'}>
+            <Button
+              type="text"
+              size="small"
+              icon={record.is_favorited ? <HeartFilled style={{ color: '#eb2f96' }} /> : <HeartOutlined />}
+              onClick={() => handleFavorite(record)}
+            />
+          </Tooltip>
+        </Space>
+      ),
+    },
     {
       title: '模型名称',
       dataIndex: 'name',
       key: 'name',
       render: (name: string, record: UserModel) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{name}</div>
+          <div style={{ fontWeight: 500 }}>
+            {record.is_pinned && <PushpinFilled style={{ color: '#1890ff', marginRight: 4 }} />}
+            {name}
+          </div>
           <div style={{ fontSize: 12, color: '#999' }}>
             {record.description || '暂无描述'}
           </div>
@@ -183,6 +286,19 @@ const ModelList: React.FC = () => {
               onClick={() => handleTrain(record)}
             />
           </Tooltip>
+          {record.status === 'trained' && (
+            publishedModelIds.has(record.id) ? (
+              <Tag color="green" style={{ marginLeft: 4 }}>已发布</Tag>
+            ) : (
+              <Tooltip title="发布到社区">
+                <Button
+                  type="text"
+                  icon={<SendOutlined />}
+                  onClick={() => handlePublish(record)}
+                />
+              </Tooltip>
+            )
+          )}
           <Popconfirm
             title="确认删除"
             description="删除后无法恢复，是否继续？"
@@ -246,18 +362,25 @@ const ModelList: React.FC = () => {
       <Card
         title="模型列表"
         extra={
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => navigate('/models/build')}
-          >
-            创建模型
-          </Button>
+          <Space>
+            <Segmented
+              options={['全部', '收藏', '置顶']}
+              value={filter}
+              onChange={(v) => setFilter(v as string)}
+            />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => navigate('/models/build')}
+            >
+              创建模型
+            </Button>
+          </Space>
         }
       >
         <Table
           columns={columns}
-          dataSource={models}
+          dataSource={filteredModels}
           rowKey="id"
           loading={loading}
           pagination={{ pageSize: 10 }}

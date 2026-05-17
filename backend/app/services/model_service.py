@@ -205,9 +205,12 @@ class ModelService:
             })
         return types
     
-    def get_models(self, skip: int = 0, limit: int = 100) -> List[UserModel]:
-        """获取用户模型列表"""
-        return self.db.query(UserModel).offset(skip).limit(limit).all()
+    def get_models(self, skip: int = 0, limit: int = 100, user_id: Optional[int] = None) -> List[UserModel]:
+        """获取用户模型列表，按 user_id 过滤"""
+        query = self.db.query(UserModel)
+        if user_id is not None:
+            query = query.filter(UserModel.user_id == user_id)
+        return query.offset(skip).limit(limit).all()
     
     def get_model(self, model_id: int) -> Optional[UserModel]:
         """根据ID获取模型"""
@@ -221,18 +224,19 @@ class ModelService:
         features: List[str],
         target: str,
         stock_codes: List[str],
+        user_id: Optional[int] = None,
         description: Optional[str] = None,
         feature_config: Optional[Dict[str, Any]] = None,
         target_config: Optional[Dict[str, Any]] = None,
         train_date_range: Optional[Dict[str, str]] = None
     ) -> UserModel:
-        """创建新模型"""
+        """创建新模型，绑定 user_id"""
         
-        # 验证模型类型
         if model_type not in self.MODEL_TYPES:
             raise ValueError(f"不支持的模型类型: {model_type}")
         
         model = UserModel(
+            user_id=user_id,
             name=name,
             description=description,
             model_type=model_type,
@@ -279,18 +283,17 @@ class ModelService:
         
         return True
     
-    def clone_model(self, model_id: int, new_name: Optional[str] = None) -> Optional[UserModel]:
-        """克隆模型"""
+    def clone_model(self, model_id: int, new_name: Optional[str] = None, user_id: Optional[int] = None) -> Optional[UserModel]:
+        """克隆模型，绑定到指定用户"""
         model = self.get_model(model_id)
         if not model:
             return None
         
-        # 创建新名称
         if not new_name:
             new_name = f"{model.name}_副本"
         
-        # 创建新模型
         new_model = UserModel(
+            user_id=user_id,
             name=new_name,
             description=model.description,
             model_type=model.model_type,

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import {
   Card,
   Table,
@@ -17,6 +17,7 @@ import {
   Statistic,
   Row,
   Col,
+  Popconfirm,
 } from 'antd'
 import {
   PlusOutlined,
@@ -28,6 +29,9 @@ import {
   CalendarOutlined,
   InfoCircleOutlined,
   SyncOutlined,
+  PushpinOutlined,
+  PushpinFilled,
+  DeleteOutlined,
 } from '@ant-design/icons'
 import { dataApi } from '@/services/api'
 import { Stock } from '@/types'
@@ -43,6 +47,12 @@ const DataManagement: React.FC = () => {
   const [fetchMessage, setFetchMessage] = useState('')
   const [fetchStage, setFetchStage] = useState('')
   const [fetchResult, setFetchResult] = useState<{ stock_name: string; price_count: number } | null>(null)
+
+  const [syncingCode, setSyncingCode] = useState<string | null>(null)
+  const [syncProgress, setSyncProgress] = useState(0)
+  const [syncMessage, setSyncMessage] = useState('')
+  const syncTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [updatingAll, setUpdatingAll] = useState(false)
 
   useEffect(() => {
     fetchStocks()
@@ -74,43 +84,77 @@ const DataManagement: React.FC = () => {
     const baseUrl = (window as any).__API_BASE_URL__ || ''
     const url = `${baseUrl}/api/data/stocks/fetch-stream?code=${encodeURIComponent(code)}&token=${token || ''}`
 
-    const eventSource = new EventSource(url)
+    let retryCount = 0
+    const maxRetries = 2
 
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        setFetchProgress(data.progress || 0)
-        setFetchMessage(data.message || '')
-        setFetchStage(data.stage || '')
-
-        if (data.stage === 'completed') {
+    const connectSSE = () => {
+      const eventSource = new EventSource(url)
+      let receivedData = false
+      const timeoutId = setTimeout(() => {
+        if (!receivedData) {
           eventSource.close()
-          setFetching(false)
-          setFetchResult({ stock_name: data.stock?.name || code, price_count: data.price_count || 0 })
-          message.success(data.message)
-          fetchStocks()
-          fetchForm.resetFields()
-        } else if (data.stage === 'error') {
-          eventSource.close()
-          setFetching(false)
-          message.error(data.message)
+          handleFetchStockFallback(code)
         }
-      } catch {
-        // 忽略SSE解析错误
+      }, 15000)
+
+      eventSource.onmessage = (event) => {
+        receivedData = true
+        clearTimeout(timeoutId)
+        try {
+          const data = JSON.parse(event.data)
+          setFetchProgress(data.progress || 0)
+          setFetchMessage(data.message || '')
+          setFetchStage(data.stage || '')
+
+          if (data.stage === 'completed') {
+            eventSource.close()
+            setFetching(false)
+            setFetchResult({ stock_name: data.stock?.name || code, price_count: data.price_count || 0 })
+            message.success(data.message)
+            fetchStocks()
+            fetchForm.resetFields()
+          } else if (data.stage === 'error') {
+            eventSource.close()
+            setFetching(false)
+            message.error(data.message)
+          }
+        } catch {
+          // ignore SSE parse errors
+        }
+      }
+
+      eventSource.onerror = () => {
+        clearTimeout(timeoutId)
+        eventSource.close()
+        retryCount++
+        if (retryCount <= maxRetries && !receivedData) {
+          setFetchMessage(`连接中断，正在重试 (${retryCount}/${maxRetries})...`)
+          setTimeout(connectSSE, 1000)
+        } else {
+          handleFetchStockFallback(code)
+        }
       }
     }
 
-    eventSource.onerror = () => {
-      eventSource.close()
-      handleFetchStockFallback(code)
-    }
+    connectSSE()
   }
 
   const handleFetchStockFallback = async (code: string) => {
     setFetchMessage('正在获取数据（回退模式）...')
-    setFetchProgress(50)
+    setFetchStage('fetch')
+    setFetchProgress(10)
+
+    const progressTimer = setInterval(() => {
+      setFetchProgress((prev) => {
+        if (prev >= 85) return prev
+        return prev + Math.random() * 8
+      })
+    }, 300)
+
     try {
       const result: any = await dataApi.fetchStock({ code })
+      clearInterval(progressTimer)
+      setFetchProgress(100)
       if (result.success) {
         setFetchResult({ stock_name: result.stock?.name || code, price_count: result.price_count || 0 })
         message.success(result.message)
@@ -120,17 +164,33 @@ const DataManagement: React.FC = () => {
         message.error(result.message)
       }
     } catch (error: any) {
+      clearInterval(progressTimer)
       message.error(error?.response?.data?.message || '获取数据失败')
     } finally {
       setFetching(false)
-      setFetchProgress(100)
     }
   }
 
   const handleSync = async (code: string) => {
-    const hide = message.loading(`正在同步 ${code}...`, 0)
+    if (syncingCode) return
+
+    setSyncingCode(code)
+    setSyncProgress(10)
+    setSyncMessage(`正在同步 ${code}...`)
+
+    if (syncTimerRef.current) clearInterval(syncTimerRef.current)
+    syncTimerRef.current = setInterval(() => {
+      setSyncProgress((prev) => {
+        if (prev >= 90) return prev
+        return prev + Math.random() * 12
+      })
+    }, 300)
+
     try {
       const result: any = await dataApi.syncStockPrices(code)
+      if (syncTimerRef.current) clearInterval(syncTimerRef.current)
+      setSyncProgress(100)
+      setSyncMessage('同步完成')
       if (result.success) {
         message.success(result.message)
         fetchStocks()
@@ -138,9 +198,52 @@ const DataManagement: React.FC = () => {
         message.error(result.message)
       }
     } catch (error: any) {
+      if (syncTimerRef.current) clearInterval(syncTimerRef.current)
       message.error(error?.response?.data?.message || '同步失败')
     } finally {
-      hide()
+      setTimeout(() => {
+        setSyncingCode(null)
+        setSyncProgress(0)
+        setSyncMessage('')
+      }, 800)
+    }
+  }
+
+  const handlePin = async (code: string, isPinned: boolean) => {
+    try {
+      if (isPinned) {
+        await dataApi.unpinStock(code)
+        message.success('已取消置顶')
+      } else {
+        await dataApi.pinStock(code)
+        message.success('已置顶')
+      }
+      fetchStocks()
+    } catch (error) {
+      message.error('操作失败')
+    }
+  }
+
+  const handleDelete = async (code: string) => {
+    try {
+      await dataApi.deleteStock(code)
+      message.success('删除成功')
+      fetchStocks()
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '删除失败')
+    }
+  }
+
+  const handleUpdateAll = async () => {
+    setUpdatingAll(true)
+    try {
+      const res: any = await dataApi.updateAll()
+      message.success(`更新完成: ${res.synced_count} 只成功, ${res.failed_count} 只失败`)
+      fetchStocks()
+    } catch {
+      message.error('批量更新失败')
+    } finally {
+      setUpdatingAll(false)
     }
   }
 
@@ -148,11 +251,29 @@ const DataManagement: React.FC = () => {
 
   const columns = [
     {
+      title: '',
+      key: 'pin',
+      width: 40,
+      render: (_: any, record: Stock) => (
+        <Button
+          type="text"
+          size="small"
+          icon={record.is_pinned ? <PushpinFilled style={{ color: '#1890ff' }} /> : <PushpinOutlined />}
+          onClick={() => handlePin(record.code, !!record.is_pinned)}
+        />
+      ),
+    },
+    {
       title: '代码',
       dataIndex: 'code',
       key: 'code',
       width: 100,
-      render: (code: string) => <strong>{code}</strong>,
+      render: (code: string, record: Stock) => (
+        <Space>
+          <strong>{code}</strong>
+          {record.is_pinned && <Tag color="blue" style={{ fontSize: 10 }}>置顶</Tag>}
+        </Space>
+      ),
     },
     {
       title: '名称',
@@ -204,18 +325,32 @@ const DataManagement: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 160,
       render: (_: any, record: Stock) => (
-        <Tooltip title="重新从数据源同步最新价格数据">
-          <Button
-            type="text"
-            icon={<SyncOutlined />}
-            onClick={() => handleSync(record.code)}
-            size="small"
+        <Space>
+          <Tooltip title="同步数据">
+            <Button
+              type="text"
+              icon={<SyncOutlined />}
+              onClick={() => handleSync(record.code)}
+              size="small"
+            >
+              同步
+            </Button>
+          </Tooltip>
+          <Popconfirm
+            title="确认删除"
+            description={`删除股票 ${record.name}(${record.code}) 及其所有价格数据？`}
+            onConfirm={() => handleDelete(record.code)}
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
           >
-            同步
-          </Button>
-        </Tooltip>
+            <Tooltip title="删除股票">
+              <Button type="text" danger icon={<DeleteOutlined />} size="small" />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
       ),
     },
   ]
@@ -227,7 +362,6 @@ const DataManagement: React.FC = () => {
         管理A股历史数据。输入股票代码获取数据后，即可用于模型训练和预测。
       </p>
 
-      {/* 数据总览 */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={8}>
           <Card size="small">
@@ -258,8 +392,7 @@ const DataManagement: React.FC = () => {
           <ul style={{ margin: 0, paddingLeft: 20 }}>
             <li>输入6位A股代码即可获取近3年历史数据（如 600519 茅台、000001 平安银行）</li>
             <li>数据来源自动降级：baostock → 腾讯财经 → 新浪财经</li>
-            <li>获取的数据包含：开盘价、最高价、最低价、收盘价、成交量、成交额、涨跌幅</li>
-            <li>点击"同步"可更新已有股票的最新数据</li>
+            <li>点击📌图标可置顶/取消置顶股票，置顶的股票排在最前</li>
           </ul>
         }
         type="info"
@@ -268,16 +401,43 @@ const DataManagement: React.FC = () => {
         style={{ marginBottom: 16 }}
       />
 
+      {syncingCode && (
+        <Card size="small" style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <SyncOutlined spin style={{ color: '#1890ff', fontSize: 16 }} />
+            <div style={{ flex: 1 }}>
+              <Progress
+                percent={Math.round(syncProgress)}
+                status="active"
+                strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
+                size="small"
+              />
+            </div>
+            <span style={{ color: '#666', fontSize: 13, whiteSpace: 'nowrap' }}>{syncMessage}</span>
+          </div>
+        </Card>
+      )}
+
       <Card
         title="股票列表"
         extra={
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setFetchModalVisible(true)}
-          >
-            获取股票数据
-          </Button>
+          <Space>
+            <Button
+              icon={<SyncOutlined spin={updatingAll} />}
+              onClick={handleUpdateAll}
+              loading={updatingAll}
+              disabled={stocks.filter((s) => (s.price_count || 0) > 0).length === 0}
+            >
+              一键更新所有数据
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setFetchModalVisible(true)}
+            >
+              获取股票数据
+            </Button>
+          </Space>
         }
       >
         <Table
@@ -291,7 +451,6 @@ const DataManagement: React.FC = () => {
         />
       </Card>
 
-      {/* 获取股票数据弹窗 */}
       <Modal
         title="获取股票数据"
         open={fetchModalVisible}

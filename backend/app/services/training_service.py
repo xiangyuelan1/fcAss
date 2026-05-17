@@ -219,11 +219,16 @@ class TrainingService:
         model_id: Optional[int] = None,
         status: Optional[str] = None,
         skip: int = 0,
-        limit: int = 100
+        limit: int = 100,
+        user_id: Optional[int] = None
     ) -> List[TrainingTask]:
-        """获取训练任务列表"""
+        """获取训练任务列表，按 user_id 过滤时通过 join UserModel 实现"""
         query = self.db.query(TrainingTask)
         
+        if user_id is not None:
+            query = query.join(UserModel, TrainingTask.model_id == UserModel.id).filter(
+                UserModel.user_id == user_id
+            )
         if model_id:
             query = query.filter(TrainingTask.model_id == model_id)
         if status:
@@ -270,10 +275,9 @@ class TrainingService:
     
     def get_training_logs(self, task_id: int) -> List[str]:
         """获取训练日志"""
-        # 从文件读取日志
         log_path = os.path.join(settings.MODEL_DIR, f'task_{task_id}_log.txt')
         if os.path.exists(log_path):
-            with open(log_path, 'r') as f:
+            with open(log_path, 'r', encoding='utf-8') as f:
                 return f.readlines()
         return []
     
@@ -376,6 +380,17 @@ class TrainingService:
         skip_reasons = []
         
         for code in user_model.stock_codes:
+            # 自动获取缺失的股票数据（共享缓存+动态获取）
+            existing_prices = self.data_service.get_stock_prices(code=code, limit=1)
+            if len(existing_prices) == 0:
+                self._log(task_id, f"股票 {code} 本地无数据，正在自动获取...")
+                try:
+                    result = self.data_service.fetch_stock_data(code)
+                    fetched_count = result.get('price_count', 0)
+                    self._log(task_id, f"已自动获取 {code} 的 {fetched_count} 条数据")
+                except Exception as e:
+                    self._log(task_id, f"自动获取 {code} 数据失败: {str(e)}")
+
             # 获取价格数据
             prices = self.data_service.get_stock_prices(
                 code=code,

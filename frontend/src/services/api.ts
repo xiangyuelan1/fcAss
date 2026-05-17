@@ -1,5 +1,4 @@
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
-import { message } from 'antd';
 
 // 创建axios实例
 const api: AxiosInstance = axios.create({
@@ -38,36 +37,51 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
     const errorMessage = error.response?.data?.detail || error.message || '请求失败';
-    message.error(errorMessage);
+    console.error('API请求失败:', errorMessage);
     return Promise.reject(error);
   }
 );
 
 // 数据管理API
 export const dataApi = {
-  // 按代码获取股票数据（自动创建记录并同步价格，核心入口）
   fetchStock: (data: { code: string; start_date?: string; end_date?: string }) =>
     api.post('/data/stocks/fetch', data),
 
-  // 获取已存的股票列表
   getStocks: (params?: { search?: string; industry?: string }) =>
     api.get('/data/stocks', { params }),
 
-  // 获取股票历史价格
   getStockPrices: (code: string, params?: { start_date?: string; end_date?: string; limit?: number }) =>
     api.get(`/data/stocks/${code}/prices`, { params }),
 
-  // 重新同步股票价格
   syncStockPrices: (code: string) =>
     api.post(`/data/stocks/${code}/sync`),
 
-  // 获取股票信息
   getStockInfo: (code: string) =>
     api.get(`/data/stocks/${code}/info`),
 
-  // 获取行业列表
   getIndustries: () =>
     api.get('/data/industries'),
+
+  pinStock: (code: string) =>
+    api.post(`/data/stocks/${code}/pin`),
+
+  unpinStock: (code: string) =>
+    api.post(`/data/stocks/${code}/unpin`),
+
+  deleteStock: (code: string) =>
+    api.delete(`/data/stocks/${code}`),
+
+  checkStaleData: () =>
+    api.get('/data/stale-check'),
+
+  batchSync: () =>
+    api.post('/data/batch-sync'),
+
+  updateAll: () =>
+    api.post('/data/update-all'),
+
+  ensureStockData: (code: string) =>
+    api.post(`/data/stocks/${code}/ensure`),
 };
 
 // 特征工程API
@@ -104,11 +118,9 @@ export const featureApi = {
 
 // 模型管理API
 export const modelApi = {
-  // 获取模型列表
-  getModels: (params?: { skip?: number; limit?: number }) =>
+  getModels: (params?: { page?: number; page_size?: number }) =>
     api.get('/models', { params }),
   
-  // 创建模型
   createModel: (data: {
     name: string;
     description?: string;
@@ -124,42 +136,59 @@ export const modelApi = {
     };
   }) => api.post('/models', data),
   
-  // 获取模型详情
   getModel: (id: number) =>
     api.get(`/models/${id}`),
   
-  // 更新模型
   updateModel: (id: number, data: any) =>
     api.put(`/models/${id}`, data),
   
-  // 删除模型
   deleteModel: (id: number) =>
     api.delete(`/models/${id}`),
   
-  // 获取模型配置
   getModelConfig: (id: number) =>
     api.get(`/models/${id}/config`),
   
-  // 获取可用模型类型
   getModelTypes: () =>
     api.get('/models/types/available'),
+
+  getTypeStats: () =>
+    api.get('/models/types/stats'),
   
-  // 克隆模型
   cloneModel: (id: number, newName?: string) =>
     api.post(`/models/${id}/clone`, null, { params: { new_name: newName } }),
 
-  // AI优化参数
   aiOptimizeParams: (data: {
     model_type: string;
     features?: string[];
     stock_codes?: string[];
   }) => api.post('/models/ai-optimize-params', data),
+
+  pinModel: (id: number) =>
+    api.post(`/models/${id}/pin`),
+
+  unpinModel: (id: number) =>
+    api.post(`/models/${id}/unpin`),
+
+  favoriteModel: (id: number) =>
+    api.post(`/models/${id}/favorite`),
+
+  unfavoriteModel: (id: number) =>
+    api.post(`/models/${id}/unfavorite`),
+
+  getTemplates: () =>
+    api.get('/models/templates'),
+
+  createFromTemplate: (templateId: string) =>
+    api.post(`/models/templates/${templateId}/create`),
+
+  getRandomStock: () =>
+    api.get('/models/random-stock'),
 };
 
 // 训练任务API
 export const trainingApi = {
   // 获取训练任务列表
-  getTasks: (params?: { model_id?: number; status?: string; skip?: number; limit?: number }) =>
+  getTasks: (params?: { model_id?: number; status?: string; page?: number; page_size?: number }) =>
     api.get('/training/tasks', { params }),
   
   // 创建训练任务
@@ -207,7 +236,7 @@ export const backtestApi = {
   }) => api.post('/backtest/run', data),
   
   // 获取回测结果列表
-  getResults: (params?: { task_id?: number; skip?: number; limit?: number }) =>
+  getResults: (params?: { task_id?: number; page?: number; page_size?: number }) =>
     api.get('/backtest/results', { params }),
   
   // 获取回测结果详情
@@ -274,33 +303,140 @@ export const authApi = {
   // 刷新令牌
   refreshToken: () =>
     api.post('/auth/refresh'),
+
+  // 修改密码
+  changePassword: (data: { old_password: string; new_password: string }) =>
+    api.post('/auth/change-password', data),
+
+  // 心跳上报（保持在线状态）
+  heartbeat: () =>
+    api.post('/auth/heartbeat'),
+
+  // 获取当前在线人数
+  getOnlineCount: () =>
+    api.get('/auth/online-count'),
 };
 
 // 支付API
 export const paymentApi = {
-  // 获取注册付费信息
   getRegisterInfo: () =>
     api.get('/payment/register-info'),
 
-  // 创建付费注册订单
   createOrder: (data: { username: string; email?: string; password: string; pay_type: string }) =>
     api.post('/payment/order/create', data),
 
-  // 获取支付二维码
   getQrcode: (out_trade_no: string) =>
     api.post('/payment/order/qrcode', null, { params: { out_trade_no } }),
 
-  // 查询订单支付状态
   queryOrderStatus: (out_trade_no: string) =>
     api.get('/payment/order/status', { params: { out_trade_no } }),
 
-  // 获取支付配置（管理员）
   getConfig: () =>
     api.get('/payment/config'),
 
-  // 保存支付配置（管理员）
   saveConfig: (data: { name: string; gateway_url: string; pid: string; secret_key: string; register_fee: number; pay_type: string; is_active: boolean }) =>
     api.post('/payment/config', data),
+};
+
+export const adminApi = {
+  listUsers: (params?: { skip?: number; limit?: number }) =>
+    api.get('/admin/users', { params }),
+
+  getUser: (userId: number) =>
+    api.get(`/admin/users/${userId}`),
+
+  resetUserPassword: (userId: number, data: { new_password: string }) =>
+    api.post(`/admin/users/${userId}/reset-password`, data),
+
+  toggleUserActive: (userId: number) =>
+    api.post(`/admin/users/${userId}/toggle-active`),
+
+  listConfigs: (params?: { category?: string }) =>
+    api.get('/admin/config', { params }),
+
+  createConfig: (data: { category: string; name: string; key: string; description?: string; value: any; is_active?: boolean; sort_order?: number }) =>
+    api.post('/admin/config', data),
+
+  updateConfig: (configId: number, data: { category?: string; name?: string; description?: string; value?: any; is_active?: boolean; sort_order?: number }) =>
+    api.put(`/admin/config/${configId}`, data),
+
+  deleteConfig: (configId: number) =>
+    api.delete(`/admin/config/${configId}`),
+
+  getActiveConfigs: (category: string) =>
+    api.get(`/admin/config/active/${category}`),
+
+  getStats: () =>
+    api.get('/admin/stats'),
+
+  getActivity: (params?: any) =>
+    api.get('/admin/activity', { params }),
+
+  // 获取用户详情（含模型、训练记录等）
+  getUserDetail: (userId: number) =>
+    api.get(`/admin/users/${userId}/detail`),
+
+  // 获取用户统计信息（含在线人数）
+  getUserStats: () =>
+    api.get('/admin/user-stats'),
+};
+
+export const communityApi = {
+  getModels: (params?: any) => api.get('/community/models', { params }),
+  getModel: (id: number) => api.get(`/community/models/${id}`),
+  publishModel: (data: any) => api.post('/community/models/publish', data),
+  unpublishModel: (id: number) => api.post(`/community/models/${id}/unpublish`),
+  likeModel: (id: number) => api.post(`/community/models/${id}/like`),
+  cloneModel: (id: number) => api.post(`/community/models/${id}/clone`),
+  getSignals: (params?: any) => api.get('/community/signals', { params }),
+  publishSignal: (data: any) => api.post('/community/signals/publish', data),
+  likeSignal: (id: number) => api.post(`/community/signals/${id}/like`),
+  getMySignals: () => api.get('/community/signals/my'),
+};
+
+export const pkApi = {
+  createChallenge: (data: any) => api.post('/pk/challenges', data),
+  getChallenges: (params?: any) => api.get('/pk/challenges', { params }),
+  acceptChallenge: (id: number, data: any) => api.post(`/pk/challenges/${id}/accept`, data),
+  evaluateChallenge: (id: number) => api.post(`/pk/challenges/${id}/evaluate`),
+  getChallenge: (id: number) => api.get(`/pk/challenges/${id}`),
+  getLeaderboard: (params?: any) => api.get('/pk/leaderboard', { params }),
+};
+
+export const pointsApi = {
+  getBalance: () => api.get('/points/balance'),
+  getTransactions: (params?: any) => api.get('/points/transactions', { params }),
+  getLeaderboard: (params?: any) => api.get('/points/leaderboard', { params }),
+  dailyCheckin: () => api.post('/points/daily-checkin'),
+  getAchievements: () => api.get('/points/achievements'),
+  getAllAchievements: () => api.get('/points/achievements/all'),
+  checkAchievements: () => api.post('/points/check-achievements'),
+  getDailyChallenge: () => api.get('/points/daily-challenge'),
+  submitDailyChallenge: (data: any) => api.post('/points/daily-challenge/submit', data),
+};
+
+export const messageApi = {
+  sendMessage: (data: { subject: string; content: string; parent_id?: number }) =>
+    api.post('/messages', data),
+  getMessages: (params?: { page?: number; page_size?: number }) =>
+    api.get('/messages', { params }),
+  getMessage: (id: number) =>
+    api.get(`/messages/${id}`),
+  markRead: (id: number) =>
+    api.put(`/messages/${id}/read`),
+  getUnreadCount: () =>
+    api.get('/messages/unread-count'),
+  adminGetAll: (params?: { page?: number; page_size?: number; is_read?: boolean }) =>
+    api.get('/messages/admin/all', { params }),
+  adminReply: (id: number, content: string) =>
+    api.post(`/messages/admin/${id}/reply`, { content }),
+  adminMarkRead: (id: number) =>
+    api.put(`/messages/admin/${id}/read`),
+};
+
+export const guideApi = {
+  getState: () => api.get('/guide/state'),
+  complete: () => api.post('/guide/complete'),
 };
 
 export default api;

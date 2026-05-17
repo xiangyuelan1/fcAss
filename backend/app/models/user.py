@@ -18,6 +18,9 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_login_at = Column(DateTime(timezone=True), comment="最后登录时间")
+    last_login_ip = Column(String(45), comment="最后登录IP地址")
+    last_heartbeat = Column(DateTime(timezone=True), comment="最后心跳时间")
 
     def to_dict(self):
         """转换为字典"""
@@ -29,4 +32,7 @@ class User(Base):
             'is_admin': self.is_admin,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'last_login_at': self.last_login_at.isoformat() if self.last_login_at else None,
+            'last_login_ip': self.last_login_ip,
+            'last_heartbeat': self.last_heartbeat.isoformat() if self.last_heartbeat else None,
         }

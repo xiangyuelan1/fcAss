@@ -13,6 +13,8 @@ from app.models.user_model import UserModel
 from app.models.user import User
 from app.models.training import TrainingTask, BacktestResult
 from app.models.payment import PaymentConfig, PaymentOrder
+from app.models.user_prefs import UserStockPrefs, UserModelPrefs
+from app.models.system_config import SystemConfig
 from app.api import api_router
 
 

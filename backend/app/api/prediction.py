@@ -12,8 +12,18 @@ from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
 from app.services.feature_service import FeatureService
 from app.services.data_service import DataService
 from app.models.training import TrainingTask
+from app.auth import get_current_active_user
+from app.models.user import User as UserModel
 
 router = APIRouter()
+
+
+def _verify_task_ownership(task: TrainingTask, current_user: UserModel):
+    """验证训练任务是否属于当前用户，管理员可访问所有任务"""
+    if current_user.is_admin:
+        return
+    if task.user_model is None or task.user_model.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权访问该训练任务")
 
 
 class PredictRequest(BaseModel):
@@ -43,15 +53,18 @@ class BatchPredictRequest(BaseModel):
 @router.post("/predict", response_model=PredictResponse)
 async def predict(
     request: PredictRequest,
+    current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """使用已训练模型进行单只股票预测
+    """使用已训练模型进行单只股票预测，需验证任务所有权
     
-    流程：加载模型 → 获取最新数据 → 计算特征 → 模型推理 → 返回预测结果
+    流程：验证权限 → 加载模型 → 获取最新数据 → 计算特征 → 模型推理 → 返回预测结果
     """
     task = db.query(TrainingTask).filter(TrainingTask.id == request.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail=f"训练任务 {request.task_id} 不存在")
+    _verify_task_ownership(task, current_user)
+
     if task.status != 'completed':
         raise HTTPException(status_code=400, detail=f"训练任务状态为 {task.status}，仅已完成任务可预测")
 
@@ -70,7 +83,6 @@ async def predict(
     # 检查该股票是否有数据，没有则自动获取
     stock_info = data_service.get_stock_by_code(request.stock_code)
     if not stock_info:
-        # 尝试自动获取该股票数据
         try:
             result = data_service.fetch_stock_data(request.stock_code)
             if result['price_count'] == 0:
@@ -139,12 +151,15 @@ async def predict(
 @router.post("/batch-predict")
 async def batch_predict(
     request: BatchPredictRequest,
+    current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """批量预测多只股票"""
+    """批量预测多只股票，需验证任务所有权"""
     task = db.query(TrainingTask).filter(TrainingTask.id == request.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail=f"训练任务 {request.task_id} 不存在")
+    _verify_task_ownership(task, current_user)
+
     if task.status != 'completed':
         raise HTTPException(status_code=400, detail=f"训练任务状态为 {task.status}，仅已完成任务可预测")
 
@@ -203,12 +218,14 @@ async def batch_predict(
 @router.get("/tasks/{task_id}/predictable-stocks")
 async def get_predictable_stocks(
     task_id: int,
+    current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """获取指定训练任务可预测的股票列表（模型训练时使用的股票）"""
+    """获取指定训练任务可预测的股票列表，需验证任务所有权"""
     task = db.query(TrainingTask).filter(TrainingTask.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail=f"训练任务 {task_id} 不存在")
+    _verify_task_ownership(task, current_user)
 
     user_model = task.user_model
     data_service = DataService(db)

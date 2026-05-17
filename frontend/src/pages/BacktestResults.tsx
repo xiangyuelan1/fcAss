@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import {
   Card,
   Table,
@@ -16,9 +16,9 @@ import {
   Alert,
   Collapse,
   Tooltip,
+  Spin,
 } from 'antd'
 import {
-  LineChartOutlined,
   EyeOutlined,
   DeleteOutlined,
   ReloadOutlined,
@@ -28,10 +28,9 @@ import {
   InfoCircleOutlined,
   QuestionCircleOutlined,
 } from '@ant-design/icons'
-import { backtestApi, trainingApi } from '@/services/api'
-import { BacktestResult, TrainingTask } from '@/types'
-
-const { TabPane } = Tabs
+import { Line } from '@ant-design/charts'
+import { backtestApi } from '@/services/api'
+import { BacktestResult, EquityPoint } from '@/types'
 
 /**
  * 回测说明内容
@@ -123,38 +122,25 @@ const BacktestGuide: React.FC = () => (
 
 const BacktestResults: React.FC = () => {
   const [results, setResults] = useState<BacktestResult[]>([])
-  const [tasks, setTasks] = useState<Record<number, TrainingTask>>({})
   const [loading, setLoading] = useState(false)
   const [selectedResult, setSelectedResult] = useState<BacktestResult | null>(null)
   const [detailModalVisible, setDetailModalVisible] = useState(false)
 
+  const [detailLoading, setDetailLoading] = useState(false)
+
   useEffect(() => {
     fetchResults()
-    fetchTasks()
   }, [])
 
   const fetchResults = async () => {
     setLoading(true)
     try {
       const data: any = await backtestApi.getResults()
-      setResults(data)
+      setResults(Array.isArray(data) ? data : (data?.items || []))
     } catch (error) {
       message.error('获取回测结果失败')
     } finally {
       setLoading(false)
-    }
-  }
-
-  const fetchTasks = async () => {
-    try {
-      const data: any = await trainingApi.getTasks()
-      const taskMap: Record<number, TrainingTask> = {}
-      data.forEach((task: TrainingTask) => {
-        taskMap[task.id] = task
-      })
-      setTasks(taskMap)
-    } catch (error) {
-      console.error('获取任务列表失败:', error)
     }
   }
 
@@ -168,9 +154,30 @@ const BacktestResults: React.FC = () => {
     }
   }
 
-  const handleViewDetail = (result: BacktestResult) => {
+  const handleViewDetail = async (result: BacktestResult) => {
     setSelectedResult(result)
     setDetailModalVisible(true)
+    setDetailLoading(true)
+    try {
+      const [detail, equityRes, tradesRes] = await Promise.all([
+        backtestApi.getResult(result.id).catch(() => null),
+        backtestApi.getEquityCurve(result.id).catch(() => null),
+        backtestApi.getTrades(result.id).catch(() => null),
+      ])
+      const detailData = detail as any
+      const equityData = equityRes as any
+      const tradesData = tradesRes as any
+      setSelectedResult({
+        ...result,
+        ...(detailData || {}),
+        equity_curve: equityData?.equity_curve || equityData || null,
+        trades: tradesData?.trades || (Array.isArray(tradesData) ? tradesData : []),
+      })
+    } catch (error) {
+      message.error('获取详情数据失败')
+    } finally {
+      setDetailLoading(false)
+    }
   }
 
   const columns = [
@@ -324,134 +331,142 @@ const BacktestResults: React.FC = () => {
         ]}
       >
         {selectedResult && (
-          <Tabs defaultActiveKey="overview">
-            <TabPane tab="概览" key="overview">
-              <Row gutter={[16, 16]}>
-                <Col span={8}>
-                  <Card size="small">
-                    <Statistic
-                      title="初始资金"
-                      value={selectedResult.initial_capital}
-                      prefix={<DollarOutlined />}
-                      precision={2}
-                    />
-                  </Card>
-                </Col>
-                <Col span={8}>
-                  <Card size="small">
-                    <Statistic
-                      title="最终资金"
-                      value={selectedResult.final_capital || 0}
-                      prefix={<DollarOutlined />}
-                      precision={2}
-                      valueStyle={{
-                        color: (selectedResult.final_capital || 0) >= selectedResult.initial_capital
-                          ? '#f5222d'
-                          : '#52c41a',
-                      }}
-                    />
-                  </Card>
-                </Col>
-                <Col span={8}>
-                  <Card size="small">
-                    <Statistic
-                      title="总收益率"
-                      value={(selectedResult.total_return || 0) * 100}
-                      suffix="%"
-                      precision={2}
-                      valueStyle={{
-                        color: (selectedResult.total_return || 0) >= 0 ? '#f5222d' : '#52c41a',
-                      }}
-                      prefix={(selectedResult.total_return || 0) >= 0 ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
-                    />
-                  </Card>
-                </Col>
-              </Row>
+          <Spin spinning={detailLoading}>
+            <Tabs defaultActiveKey="overview" items={[
+            {
+              key: 'overview',
+              label: '概览',
+              children: (
+                <>
+                  <Row gutter={[16, 16]}>
+                    <Col span={8}>
+                      <Card size="small">
+                        <Statistic
+                          title="初始资金"
+                          value={selectedResult.initial_capital}
+                          prefix={<DollarOutlined />}
+                          precision={2}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={8}>
+                      <Card size="small">
+                        <Statistic
+                          title="最终资金"
+                          value={selectedResult.final_capital || 0}
+                          prefix={<DollarOutlined />}
+                          precision={2}
+                          valueStyle={{
+                            color: (selectedResult.final_capital || 0) >= selectedResult.initial_capital
+                              ? '#f5222d'
+                              : '#52c41a',
+                          }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={8}>
+                      <Card size="small">
+                        <Statistic
+                          title="总收益率"
+                          value={(selectedResult.total_return || 0) * 100}
+                          suffix="%"
+                          precision={2}
+                          valueStyle={{
+                            color: (selectedResult.total_return || 0) >= 0 ? '#f5222d' : '#52c41a',
+                          }}
+                          prefix={(selectedResult.total_return || 0) >= 0 ? <ArrowUpOutlined /> : <ArrowDownOutlined />}
+                        />
+                      </Card>
+                    </Col>
+                  </Row>
 
-              <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-                <Col span={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="年化收益"
-                      value={(selectedResult.annual_return || 0) * 100}
-                      suffix="%"
-                      precision={2}
-                    />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="最大回撤"
-                      value={(selectedResult.max_drawdown || 0) * 100}
-                      suffix="%"
-                      precision={2}
-                      valueStyle={{ color: '#f5222d' }}
-                    />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="夏普比率"
-                      value={selectedResult.sharpe_ratio || 0}
-                      precision={2}
-                    />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="索提诺比率"
-                      value={selectedResult.sortino_ratio || 0}
-                      precision={2}
-                    />
-                  </Card>
-                </Col>
-              </Row>
+                  <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+                    <Col span={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="年化收益"
+                          value={(selectedResult.annual_return || 0) * 100}
+                          suffix="%"
+                          precision={2}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="最大回撤"
+                          value={(selectedResult.max_drawdown || 0) * 100}
+                          suffix="%"
+                          precision={2}
+                          valueStyle={{ color: '#f5222d' }}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="夏普比率"
+                          value={selectedResult.sharpe_ratio || 0}
+                          precision={2}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="索提诺比率"
+                          value={selectedResult.sortino_ratio || 0}
+                          precision={2}
+                        />
+                      </Card>
+                    </Col>
+                  </Row>
 
-              <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-                <Col span={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="交易次数"
-                      value={selectedResult.trades_count || 0}
-                    />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="胜率"
-                      value={(selectedResult.win_rate || 0) * 100}
-                      suffix="%"
-                      precision={1}
-                    />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="盈亏比"
-                      value={selectedResult.profit_factor || 0}
-                      precision={2}
-                    />
-                  </Card>
-                </Col>
-                <Col span={6}>
-                  <Card size="small">
-                    <Statistic
-                      title="卡尔玛比率"
-                      value={selectedResult.calmar_ratio || 0}
-                      precision={2}
-                    />
-                  </Card>
-                </Col>
-              </Row>
-            </TabPane>
-
-            <TabPane tab="交易记录" key="trades">
-              {selectedResult.trades && selectedResult.trades.length > 0 ? (
+                  <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+                    <Col span={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="交易次数"
+                          value={selectedResult.trades_count || 0}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="胜率"
+                          value={(selectedResult.win_rate || 0) * 100}
+                          suffix="%"
+                          precision={1}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="盈亏比"
+                          value={selectedResult.profit_factor || 0}
+                          precision={2}
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={6}>
+                      <Card size="small">
+                        <Statistic
+                          title="卡尔玛比率"
+                          value={selectedResult.calmar_ratio || 0}
+                          precision={2}
+                        />
+                      </Card>
+                    </Col>
+                  </Row>
+                </>
+              ),
+            },
+            {
+              key: 'trades',
+              label: '交易记录',
+              children: selectedResult.trades && selectedResult.trades.length > 0 ? (
                 <List
                   size="small"
                   dataSource={selectedResult.trades}
@@ -476,23 +491,19 @@ const BacktestResults: React.FC = () => {
                 />
               ) : (
                 <Empty description="暂无交易记录" />
-              )}
-            </TabPane>
-
-            <TabPane tab="权益曲线" key="equity">
-              {selectedResult.equity_curve && selectedResult.equity_curve.length > 0 ? (
-                <div style={{ height: 400 }}>
-                  <div style={{ textAlign: 'center', padding: '100px 0', color: '#999' }}>
-                    权益曲线图表区域
-                    <br />
-                    <small>实际项目中可以使用 @ant-design/charts 绘制图表</small>
-                  </div>
-                </div>
+              ),
+            },
+            {
+              key: 'equity',
+              label: '图表分析',
+              children: selectedResult.equity_curve && selectedResult.equity_curve.length > 0 ? (
+                <EquityCharts equityCurve={selectedResult.equity_curve} initialCapital={selectedResult.initial_capital} />
               ) : (
                 <Empty description="暂无权益曲线数据" />
-              )}
-            </TabPane>
-          </Tabs>
+              ),
+            },
+          ]} />
+          </Spin>
         )}
       </Modal>
     </div>
@@ -500,3 +511,98 @@ const BacktestResults: React.FC = () => {
 }
 
 export default BacktestResults
+
+/** 回测图表组件：权益曲线 + 回撤图 + 每日收益 */
+const EquityCharts: React.FC<{ equityCurve: EquityPoint[]; initialCapital: number }> = ({
+  equityCurve,
+  initialCapital,
+}) => {
+  if (!equityCurve || equityCurve.length === 0) {
+    return <Empty description="暂无权益曲线数据" />
+  }
+
+  const equityData = useMemo(() => {
+    type EquityItem = { date: string; value: number; type: string }
+    const result: EquityItem[] = []
+    equityCurve.forEach((p) => {
+      result.push({ date: p.date, value: p.value, type: '总权益' })
+      result.push({ date: p.date, value: p.cash, type: '现金' })
+      result.push({ date: p.date, value: p.position_value, type: '持仓市值' })
+    })
+    return result
+  }, [equityCurve])
+
+  const drawdownData = useMemo(() => {
+    const result: { date: string; value: number }[] = []
+    let peak = initialCapital
+    for (const p of equityCurve) {
+      if (p.value > peak) peak = p.value
+      const dd = p.value < peak ? ((p.value - peak) / peak) * 100 : 0
+      result.push({ date: p.date, value: dd })
+    }
+    return result
+  }, [equityCurve, initialCapital])
+
+  const dailyReturnData = useMemo(() => {
+    const result: { date: string; value: number }[] = []
+    for (let i = 1; i < equityCurve.length; i++) {
+      const prev = equityCurve[i - 1].value
+      const curr = equityCurve[i].value
+      result.push({ date: equityCurve[i].date, value: prev > 0 ? ((curr - prev) / prev) * 100 : 0 })
+    }
+    return result
+  }, [equityCurve])
+
+  const baseLineConfig = {
+    xField: 'date',
+    yField: 'value',
+    height: 300,
+    smooth: true,
+    xAxis: { label: { autoRotate: true, style: { fontSize: 11 } } } as any,
+    yAxis: { label: { formatter: (v: string) => Number(v).toLocaleString(), style: { fontSize: 11 } } } as any,
+    tooltip: { shared: true } as any,
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <Card size="small" title="权益曲线" style={{ marginBottom: 0 }}>
+        <Line
+          {...baseLineConfig}
+          data={equityData}
+          seriesField="type"
+          color={['#1890ff', '#52c41a', '#faad14']}
+          yAxis={{
+            ...baseLineConfig.yAxis,
+            label: { ...baseLineConfig.yAxis.label, formatter: (v: string) => `¥${Number(v).toLocaleString()}` },
+          }}
+          legend={{ position: 'top' } as any}
+        />
+      </Card>
+
+      <Card size="small" title="回撤 (%)" style={{ marginBottom: 0 }}>
+        <Line
+          {...baseLineConfig}
+          data={drawdownData}
+          color="#f5222d"
+          yAxis={{
+            ...baseLineConfig.yAxis,
+            label: { ...baseLineConfig.yAxis.label, formatter: (v: string) => `${Number(v).toFixed(1)}%` },
+          }}
+          areaStyle={{ fill: 'l(270) 0:rgba(245,34,45,0.25) 1:rgba(245,34,45,0.02)' } as any}
+        />
+      </Card>
+
+      <Card size="small" title="每日收益 (%)" style={{ marginBottom: 0 }}>
+        <Line
+          {...baseLineConfig}
+          data={dailyReturnData}
+          color="#722ed1"
+          yAxis={{
+            ...baseLineConfig.yAxis,
+            label: { ...baseLineConfig.yAxis.label, formatter: (v: string) => `${Number(v).toFixed(2)}%` },
+          }}
+        />
+      </Card>
+    </div>
+  )
+}

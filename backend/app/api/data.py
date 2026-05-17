@@ -11,9 +11,14 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 import json
+from datetime import datetime
 
 from app.core.database import get_db
 from app.services.data_service import DataService
+from app.auth import get_current_active_user
+from app.models.user import User as UserModel
+from app.models.user_prefs import UserStockPrefs
+from app.models.stock import Stock, StockPrice
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -27,6 +32,7 @@ class StockInfo(BaseModel):
     price_count: Optional[int] = None
     earliest_date: Optional[str] = None
     latest_date: Optional[str] = None
+    is_pinned: Optional[bool] = False
 
     class Config:
         from_attributes = True
@@ -60,6 +66,58 @@ class SyncPriceResponse(BaseModel):
     success: bool
     message: str
     synced_count: int = 0
+
+
+@router.post("/stocks/{code}/ensure")
+async def ensure_stock_data(
+    code: str,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """确保股票数据存在，不存在则自动从数据源获取
+
+    用于训练/回测/预测等场景，当需要某只股票数据时自动获取，
+    避免用户必须先手动到数据管理页面获取。
+    """
+    from sqlalchemy import func
+
+    service = DataService(db)
+    stock = service.get_stock_by_code(code)
+
+    # 检查是否已有足够数据
+    if stock:
+        price_count = db.query(func.count(StockPrice.id)).filter(
+            StockPrice.stock_code == code
+        ).scalar()
+        if price_count >= 50:
+            return {
+                "success": True,
+                "message": f"股票 {stock.name}({code}) 已有 {price_count} 条数据",
+                "stock": {"code": stock.code, "name": stock.name},
+                "price_count": price_count,
+                "fetched": False,
+            }
+
+    # 数据不足，自动获取
+    try:
+        result = service.fetch_stock_data(code)
+        stock = result['stock']
+        price_count = result['price_count']
+        return {
+            "success": True,
+            "message": f"已自动获取 {stock.name}({code}) 的 {price_count} 条数据",
+            "stock": {"code": stock.code, "name": stock.name},
+            "price_count": price_count,
+            "fetched": True,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"自动获取股票 {code} 数据失败: {str(e)}",
+            "stock": None,
+            "price_count": 0,
+            "fetched": True,
+        }
 
 
 @router.post("/stocks/fetch", response_model=FetchStockResponse)
@@ -128,13 +186,14 @@ async def fetch_stock_stream(
     
     q: queue.Queue = queue.Queue()
 
-    def progress_callback(stage: str, progress: int, message: str, data: dict = None):
-        q.put(json.dumps({
+    def progress_callback(stage: str, progress: int, message: str, **kwargs):
+        payload = {
             'stage': stage,
             'progress': progress,
             'message': message,
-            **(data or {})
-        }, ensure_ascii=False))
+            **kwargs,
+        }
+        q.put(json.dumps(payload, ensure_ascii=False))
 
     def worker():
         db = None
@@ -202,14 +261,21 @@ async def fetch_stock_stream(
 async def get_stocks(
     search: Optional[str] = Query(None, description="搜索关键词（代码或名称）"),
     industry: Optional[str] = Query(None, description="行业筛选"),
+    current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    """获取数据库中已存的股票列表（含数据概要）"""
     from sqlalchemy import func
-    from app.models.stock import StockPrice
 
     service = DataService(db)
     stocks = service.get_stocks(search=search, industry=industry)
+
+    pinned_map = {}
+    prefs = db.query(UserStockPrefs).filter(
+        UserStockPrefs.user_id == current_user.id,
+        UserStockPrefs.is_pinned == True
+    ).all()
+    for p in prefs:
+        pinned_map[p.stock_code] = p.pinned_at
 
     stock_codes = [s.code for s in stocks]
     summary_map = {}
@@ -235,7 +301,11 @@ async def get_stocks(
         info['price_count'] = summary.get('price_count', 0)
         info['earliest_date'] = summary.get('earliest_date')
         info['latest_date'] = summary.get('latest_date')
+        info['is_pinned'] = stock.code in pinned_map
         result.append(info)
+
+    result.sort(key=lambda x: (0 if x.get('is_pinned') else 1, x.get('code', '')))
+
     return result
 
 
@@ -301,3 +371,213 @@ async def get_industries(db: Session = Depends(get_db)):
     service = DataService(db)
     industries = service.get_industries()
     return {"industries": industries}
+
+
+@router.post("/stocks/{code}/pin")
+async def pin_stock(
+    code: str,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    stock = db.query(Stock).filter(Stock.code == code).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"股票 {code} 不存在")
+    pref = db.query(UserStockPrefs).filter(
+        UserStockPrefs.user_id == current_user.id,
+        UserStockPrefs.stock_code == code
+    ).first()
+    if pref:
+        pref.is_pinned = True
+        pref.pinned_at = datetime.now()
+    else:
+        pref = UserStockPrefs(
+            user_id=current_user.id,
+            stock_code=code,
+            is_pinned=True,
+            pinned_at=datetime.now()
+        )
+        db.add(pref)
+    db.commit()
+    return {"success": True, "message": f"股票 {code} 已置顶"}
+
+
+@router.post("/stocks/{code}/unpin")
+async def unpin_stock(
+    code: str,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    pref = db.query(UserStockPrefs).filter(
+        UserStockPrefs.user_id == current_user.id,
+        UserStockPrefs.stock_code == code
+    ).first()
+    if pref:
+        pref.is_pinned = False
+        pref.pinned_at = None
+        db.commit()
+    return {"success": True, "message": f"股票 {code} 已取消置顶"}
+
+
+@router.delete("/stocks/{code}")
+async def delete_stock(
+    code: str,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    stock = db.query(Stock).filter(Stock.code == code).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"股票 {code} 不存在")
+    db.query(StockPrice).filter(StockPrice.stock_code == code).delete()
+    db.query(UserStockPrefs).filter(UserStockPrefs.stock_code == code).delete()
+    db.delete(stock)
+    db.commit()
+    return {"success": True, "message": f"股票 {code} 及其所有数据已删除"}
+
+
+@router.get("/stale-check")
+async def check_stale_data(db: Session = Depends(get_db)):
+    """检查已训练模型的数据新鲜度，返回数据过期的模型列表
+
+    对比每只训练股票的最新价格日期与对应训练任务的完成时间，
+    若训练后有新数据产生，则标记该模型需要重新训练。
+    """
+    from sqlalchemy import func
+    from app.models.training import TrainingTask
+    from app.models.user_model import UserModel as UserModelORM
+
+    trained_models = db.query(UserModelORM).filter(UserModelORM.status == 'trained').all()
+    stale_models = []
+
+    for model in trained_models:
+        latest_task = (
+            db.query(TrainingTask)
+            .filter(TrainingTask.model_id == model.id, TrainingTask.status == 'completed')
+            .order_by(TrainingTask.end_time.desc())
+            .first()
+        )
+        if not latest_task or not latest_task.end_time:
+            continue
+
+        task_end = latest_task.end_time
+        stale_stocks = []
+        for code in (model.stock_codes or []):
+            latest_price = (
+                db.query(func.max(StockPrice.date))
+                .filter(StockPrice.stock_code == code)
+                .scalar()
+            )
+            if latest_price and latest_price > task_end.date():
+                stale_stocks.append({
+                    'code': code,
+                    'latest_data_date': str(latest_price),
+                    'trained_at': str(task_end),
+                })
+
+        if stale_stocks:
+            stale_models.append({
+                'model_id': model.id,
+                'model_name': model.name,
+                'model_type': model.model_type,
+                'task_id': latest_task.id,
+                'trained_at': str(task_end),
+                'stale_stocks': stale_stocks,
+                'new_data_count': len(stale_stocks),
+            })
+
+    return {
+        'stale_models': stale_models,
+        'total': len(stale_models),
+    }
+
+
+@router.post("/batch-sync")
+async def batch_sync_stocks(
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """批量同步所有已训练模型涉及的股票数据
+
+    对每只股票调用增量同步（仅获取最新数据），返回同步结果。
+    """
+    from app.models.user_model import UserModel as UserModelORM
+
+    trained_models = db.query(UserModelORM).filter(UserModelORM.status == 'trained').all()
+    all_codes = set()
+    for model in trained_models:
+        for code in (model.stock_codes or []):
+            all_codes.add(code)
+
+    service = DataService(db)
+    results = []
+    for code in sorted(all_codes):
+        try:
+            count = service.sync_stock_prices(code)
+            stock = service.get_stock_by_code(code)
+            results.append({
+                'code': code,
+                'name': stock.name if stock else code,
+                'synced_count': count,
+                'success': True,
+            })
+        except Exception as e:
+            results.append({
+                'code': code,
+                'success': False,
+                'error': str(e),
+            })
+
+    return {
+        'success': True,
+        'synced_count': len([r for r in results if r.get('success')]),
+        'failed_count': len([r for r in results if not r.get('success')]),
+        'results': results,
+    }
+
+
+@router.post("/update-all")
+async def update_all_stocks(
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """一键增量更新所有已有股票的数据
+
+    对数据库中每只有数据的股票执行增量同步，仅获取最新缺失的数据。
+    """
+    from app.models.stock import Stock, StockPrice
+
+    stocks_with_data = (
+        db.query(Stock.code, Stock.name)
+        .join(StockPrice, StockPrice.stock_code == Stock.code)
+        .group_by(Stock.code, Stock.name)
+        .all()
+    )
+
+    if not stocks_with_data:
+        return {'success': True, 'synced_count': 0, 'failed_count': 0, 'message': '暂无需要更新的股票数据'}
+
+    service = DataService(db)
+    results = []
+    for stock in stocks_with_data:
+        try:
+            count = service.sync_stock_prices(stock.code)
+            results.append({
+                'code': stock.code,
+                'name': stock.name,
+                'synced_count': count,
+                'success': True,
+            })
+        except Exception as e:
+            results.append({
+                'code': stock.code,
+                'name': stock.name,
+                'success': False,
+                'error': str(e),
+            })
+
+    return {
+        'success': True,
+        'synced_count': len([r for r in results if r.get('success')]),
+        'failed_count': len([r for r in results if not r.get('success')]),
+        'total': len(stocks_with_data),
+        'results': results,
+    }

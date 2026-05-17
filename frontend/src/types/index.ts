@@ -9,6 +9,7 @@ export interface Stock {
   price_count?: number;
   earliest_date?: string;
   latest_date?: string;
+  is_pinned?: boolean;
 }
 
 export interface StockPrice {
@@ -80,6 +81,9 @@ export interface UserModel {
   status: 'draft' | 'trained' | 'deployed';
   created_at: string;
   updated_at: string;
+  is_pinned?: boolean;
+  is_favorited?: boolean;
+  is_published?: boolean;
 }
 
 export interface ModelType {
@@ -89,6 +93,24 @@ export interface ModelType {
   category: string;
   default_config: Record<string, any>;
   param_schema: Record<string, any>;
+}
+
+export interface ModelTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: 'beginner' | 'intermediate' | 'advanced';
+  model_type: string;
+  model_params: Record<string, any>;
+  features: string[];
+  feature_config: Record<string, any>;
+  target: string;
+  target_config: Record<string, any>;
+  stock_codes: string[];
+  train_date_range: { start?: string; end?: string } | null;
+  difficulty: '简单' | '中等' | '较难';
+  tags: string[];
+  is_recommended: boolean;
 }
 
 // 训练任务相关类型
@@ -175,4 +197,173 @@ export interface RouteConfig {
   element: React.ReactNode;
   title: string;
   icon?: React.ReactNode;
+}
+
+export interface AdminUser {
+  id: number;
+  username: string;
+  email: string | null;
+  is_active: boolean;
+  is_admin: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  last_login_at: string | null;
+  last_login_ip: string | null;
+  last_heartbeat: string | null;
+  is_online: boolean;
+}
+
+export interface SystemConfigItem {
+  id: number;
+  category: string;
+  name: string;
+  key: string;
+  description: string | null;
+  value: Record<string, any>;
+  is_active: boolean;
+  sort_order: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CommunityModel {
+  id: number;
+  user_id: number;
+  source_model_id: number;
+  name: string;
+  description?: string;
+  model_type: string;
+  model_params: Record<string, any>;
+  features: string[];
+  feature_config: Record<string, any>;
+  target: string;
+  target_config: Record<string, any>;
+  stock_codes: string[];
+  train_date_range?: { start?: string; end?: string };
+  metrics?: Record<string, number>;
+  likes_count: number;
+  clones_count: number;
+  is_active: boolean;
+  author?: { id: number; username: string };
+  is_liked?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommunitySignal {
+  id: number;
+  user_id: number;
+  community_model_id: number;
+  stock_code: string;
+  stock_name?: string;
+  prediction_date: string;
+  direction: string;
+  prediction_value?: number;
+  confidence?: number;
+  actual_result?: string;
+  is_correct?: boolean;
+  likes_count: number;
+  is_active: boolean;
+  author?: { id: number; username: string };
+  is_liked?: boolean;
+  created_at: string;
+}
+
+export interface PKChallenge {
+  id: number;
+  challenger_id: number;
+  challenger_model_id: number;
+  defender_model_id?: number;
+  defender_id?: number;
+  stock_code: string;
+  pk_mode: 'direction' | 'multi_price' | 'trend_5d' | 'custom';
+  pk_config?: Record<string, any>;
+  status: 'open' | 'accepted' | 'evaluating' | 'completed' | 'cancelled';
+  prediction_date?: string;
+  challenger_prediction?: Record<string, any>;
+  defender_prediction?: Record<string, any>;
+  actual_data?: Record<string, any>;
+  winner_id?: number;
+  result_detail?: Record<string, any>;
+  challenger?: { id: number; username: string };
+  defender?: { id: number; username: string };
+  created_at: string;
+  evaluated_at?: string;
+}
+
+export interface UserPoints {
+  id: number;
+  user_id: number;
+  total_points: number;
+  level: number;
+  username?: string;
+  created_at: string;
+}
+
+export interface PointTransaction {
+  id: number;
+  user_id: number;
+  action: string;
+  points: number;
+  target_type?: string;
+  target_id?: number;
+  description?: string;
+  created_at: string;
+}
+
+export interface Achievement {
+  id: number;
+  user_id: number;
+  badge_type: string;
+  badge_name: string;
+  description?: string;
+  earned_at?: string;
+}
+
+export interface AchievementBadge {
+  badge_type: string;
+  badge_name: string;
+  description: string;
+  bonus: number;
+  earned: boolean;
+  earned_at?: string;
+}
+
+export interface DailyChallenge {
+  challenge_date: string;
+  stock_code: string | null;
+  stock_name: string | null;
+  completed: boolean;
+  direction?: string | null;
+  confidence?: number | null;
+}
+
+export interface AdminStats {
+  users: { total: number; active: number; admins: number; new_today: number };
+  models: { total: number; trained: number; community_published: number };
+  training: { total_tasks: number; completed: number; failed: number; running: number };
+  community: { models: number; signals: number; likes: number; clones: number; pk_challenges: number };
+  data: { stocks: number; price_records: number };
+  points: { total_distributed: number; top_users: { user_id: number; username: string; total_points: number; level: number }[] };
+}
+
+export interface ActivityItem {
+  type: string;
+  description: string;
+  user_id: number;
+  username: string;
+  created_at: string | null;
+}
+
+export interface Message {
+  id: number;
+  sender_id: number;
+  sender_name?: string;
+  receiver_id: number;
+  subject: string;
+  content: string;
+  parent_id?: number | null;
+  is_read: boolean;
+  created_at: string;
+  replies?: Message[];
 }

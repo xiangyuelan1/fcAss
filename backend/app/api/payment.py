@@ -15,6 +15,8 @@ from typing import Optional
 from app.core.database import get_db
 from app.services import payment_service
 from app.models.payment import PaymentConfig, PaymentOrder
+from app.auth import require_admin
+from app.models.user import User as UserModel
 
 router = APIRouter()
 
@@ -106,7 +108,7 @@ async def query_order_status(out_trade_no: str, db: Session = Depends(get_db)):
 
 
 @router.get("/config")
-async def get_payment_config(db: Session = Depends(get_db)):
+async def get_payment_config(current_user: UserModel = Depends(require_admin), db: Session = Depends(get_db)):
     """获取支付配置（管理员）"""
     configs = db.query(PaymentConfig).all()
     result = []
@@ -126,7 +128,7 @@ async def get_payment_config(db: Session = Depends(get_db)):
 
 
 @router.post("/config")
-async def save_payment_config(request: PaymentConfigRequest, db: Session = Depends(get_db)):
+async def save_payment_config(request: PaymentConfigRequest, current_user: UserModel = Depends(require_admin), db: Session = Depends(get_db)):
     """保存支付配置（管理员）"""
     # 停用其他配置
     if request.is_active:

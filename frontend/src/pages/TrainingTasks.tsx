@@ -14,6 +14,7 @@ import {
   Col,
   Form,
   DatePicker,
+  Input,
   InputNumber,
   Tabs,
 } from 'antd'
@@ -35,8 +36,6 @@ import { trainingApi, modelApi, backtestApi } from '@/services/api'
 import { TrainingTask, UserModel } from '@/types'
 import dayjs from 'dayjs'
 
-const { TabPane } = Tabs
-
 const TrainingTasks: React.FC = () => {
   const navigate = useNavigate()
   const [tasks, setTasks] = useState<TrainingTask[]>([])
@@ -45,30 +44,86 @@ const TrainingTasks: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<TrainingTask | null>(null)
   const [detailModalVisible, setDetailModalVisible] = useState(false)
   const [progressMap, setProgressMap] = useState<Record<number, any>>({})
+  const sseRefs = useRef<Record<number, EventSource>>({})
 
-  // 训练日志状态
   const [logs, setLogs] = useState<string[]>([])
   const [logsLoading, setLogsLoading] = useState(false)
   const logsEndRef = useRef<HTMLDivElement>(null)
 
-  // 回测弹窗状态
   const [backtestModalVisible, setBacktestModalVisible] = useState(false)
   const [backtestTask, setBacktestTask] = useState<TrainingTask | null>(null)
   const [backtestLoading, setBacktestLoading] = useState(false)
+  const [backtestProgress, setBacktestProgress] = useState(0)
+  const [backtestMessage, setBacktestMessage] = useState('')
   const [backtestForm] = Form.useForm()
+  const [backtestResults, setBacktestResults] = useState<Record<number, any>>({})
 
   useEffect(() => {
     fetchTasks()
     fetchModels()
-    const interval = setInterval(fetchProgress, 3000)
-    return () => clearInterval(interval)
+    return () => {
+      Object.values(sseRefs.current).forEach(es => es.close())
+    }
   }, [])
+
+  useEffect(() => {
+    const runningTasks = tasks.filter(t => t.status === 'running')
+    runningTasks.forEach(task => {
+      if (!sseRefs.current[task.id]) {
+        connectSSE(task.id)
+      }
+    })
+    Object.keys(sseRefs.current).forEach(id => {
+      const taskId = Number(id)
+      if (!runningTasks.find(t => t.id === taskId)) {
+        sseRefs.current[taskId]?.close()
+        delete sseRefs.current[taskId]
+      }
+    })
+  }, [tasks])
+
+  const connectSSE = (taskId: number) => {
+    if (sseRefs.current[taskId]) return
+
+    const token = localStorage.getItem('token')
+    const baseUrl = (window as any).__API_BASE_URL__ || ''
+    const url = `${baseUrl}/api/training/tasks/${taskId}/progress-stream?token=${token || ''}`
+    const es = new EventSource(url)
+    sseRefs.current[taskId] = es
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        setProgressMap(prev => ({
+          ...prev,
+          [taskId]: data
+        }))
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
+          es.close()
+          delete sseRefs.current[taskId]
+          fetchTasks()
+        }
+      } catch {}
+    }
+
+    es.onerror = () => {
+      es.close()
+      delete sseRefs.current[taskId]
+    }
+  }
 
   const fetchTasks = async () => {
     setLoading(true)
     try {
       const data: any = await trainingApi.getTasks()
-      setTasks(data)
+      const items = data?.items || (Array.isArray(data) ? data : [])
+      setTasks(items)
+      const completedTaskIds = items
+        .filter((t: TrainingTask) => t.status === 'completed')
+        .map((t: TrainingTask) => t.id)
+      if (completedTaskIds.length > 0) {
+        fetchBacktestResults(completedTaskIds)
+      }
     } catch (error) {
       message.error('获取训练任务失败')
     } finally {
@@ -76,28 +131,33 @@ const TrainingTasks: React.FC = () => {
     }
   }
 
+  const fetchBacktestResults = async (taskIds: number[]) => {
+    try {
+      const results: Record<number, any> = {}
+      for (const taskId of taskIds) {
+        try {
+          const res: any = await backtestApi.getResults({ task_id: taskId })
+          const items = res?.items || (Array.isArray(res) ? res : [])
+          if (items.length > 0) {
+            results[taskId] = items[0]
+          }
+        } catch {}
+      }
+      setBacktestResults(results)
+    } catch {}
+  }
+
   const fetchModels = async () => {
     try {
       const data: any = await modelApi.getModels()
+      const models = data?.items || (Array.isArray(data) ? data : [])
       const modelMap: Record<number, UserModel> = {}
-      data.forEach((model: UserModel) => {
+      models.forEach((model: UserModel) => {
         modelMap[model.id] = model
       })
       setModels(modelMap)
     } catch (error) {
       console.error('获取模型列表失败:', error)
-    }
-  }
-
-  const fetchProgress = async () => {
-    const runningTasks = tasks.filter((t) => t.status === 'running')
-    for (const task of runningTasks) {
-      try {
-        const progress: any = await trainingApi.getTaskProgress(task.id)
-        setProgressMap((prev) => ({ ...prev, [task.id]: progress.progress }))
-      } catch (error) {
-        console.error('获取进度失败:', error)
-      }
     }
   }
 
@@ -163,26 +223,70 @@ const TrainingTasks: React.FC = () => {
     try {
       const values = await backtestForm.validateFields()
       setBacktestLoading(true)
+      setBacktestProgress(0)
+      setBacktestMessage('正在创建回测任务...')
+
+      const token = localStorage.getItem('token')
+      const baseUrl = (window as any).__API_BASE_URL__ || ''
       const dateRange = values.start_date
-      await backtestApi.runBacktest({
-        task_id: backtestTask.id,
-        start_date: dateRange[0].format('YYYY-MM-DD'),
-        end_date: dateRange[1].format('YYYY-MM-DD'),
-        initial_capital: values.initial_capital || 100000,
-        commission_rate: values.commission_rate || 0.0003,
+
+      const sseUrl = `${baseUrl}/api/backtest/run-stream?token=${token || ''}`
+
+      const response = await fetch(`${sseUrl}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          task_id: backtestTask.id,
+          start_date: dateRange[0].format('YYYY-MM-DD'),
+          end_date: dateRange[1].format('YYYY-MM-DD'),
+          initial_capital: values.initial_capital || 100000,
+          commission_rate: values.commission_rate || 0.0003,
+        }),
       })
-      message.success('回测任务已创建，正在后台执行')
-      setBacktestModalVisible(false)
-      navigate('/backtest')
+
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+
+      if (reader) {
+        let buffer = ''
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6))
+                setBacktestProgress(data.progress || 0)
+                setBacktestMessage(data.message || '')
+                if (data.stage === 'completed') {
+                  message.success('回测完成')
+                  setBacktestModalVisible(false)
+                  navigate('/backtest')
+                } else if (data.stage === 'error') {
+                  message.error(data.message || '回测失败')
+                }
+              } catch {}
+            }
+          }
+        }
+      }
+
+      setBacktestLoading(false)
     } catch (error: any) {
+      setBacktestLoading(false)
       const detail = error?.response?.data?.detail
       if (typeof detail === 'string') {
         message.error(detail)
       } else {
         message.error('创建回测失败')
       }
-    } finally {
-      setBacktestLoading(false)
     }
   }
 
@@ -237,11 +341,31 @@ const TrainingTasks: React.FC = () => {
         <div>
           {getStatusTag(status)}
           {status === 'running' && progressMap[record.id] && (
-            <Progress
-              percent={progressMap[record.id].progress}
-              size="small"
-              style={{ marginTop: 8, width: 120 }}
-            />
+            <div style={{ marginTop: 8 }}>
+              <Progress
+                percent={progressMap[record.id].progress || 0}
+                size="small"
+                style={{ width: 120 }}
+                status="active"
+              />
+              {progressMap[record.id].epoch && (
+                <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                  Epoch {progressMap[record.id].epoch}
+                  {progressMap[record.id].train_loss != null && ` | Loss: ${progressMap[record.id].train_loss.toFixed(4)}`}
+                </div>
+              )}
+            </div>
+          )}
+          {record.status === 'completed' && backtestResults[record.id] && (
+            <div style={{ marginTop: 4, fontSize: 11, color: '#666' }}>
+              <span style={{ color: (backtestResults[record.id].total_return || 0) >= 0 ? '#f5222d' : '#52c41a' }}>
+                收益: {((backtestResults[record.id].total_return || 0) * 100).toFixed(1)}%
+              </span>
+              {' | '}
+              <span>夏普: {(backtestResults[record.id].sharpe_ratio || 0).toFixed(2)}</span>
+              {' | '}
+              <span style={{ color: '#f5222d' }}>回撤: {((backtestResults[record.id].max_drawdown || 0) * 100).toFixed(1)}%</span>
+            </div>
           )}
         </div>
       ),
@@ -295,6 +419,16 @@ const TrainingTasks: React.FC = () => {
               >
                 回测
               </Button>
+              {backtestResults[record.id] && (
+                <Button
+                  type="text"
+                  icon={<EyeOutlined />}
+                  style={{ color: '#1890ff' }}
+                  onClick={() => navigate(`/backtest`)}
+                >
+                  回测详情
+                </Button>
+              )}
               <Button
                 type="text"
                 icon={<ThunderboltOutlined />}
@@ -326,9 +460,9 @@ const TrainingTasks: React.FC = () => {
 
   return (
     <div>
-      <h1 className="page-title">训练任务</h1>
+      <h1 className="page-title">训练与回测</h1>
       <p className="page-description">
-        查看和管理模型训练任务，训练完成后可直接进行回测和预测。
+        创建模型训练任务，训练完成后可直接回测验证策略表现。
       </p>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
@@ -381,7 +515,6 @@ const TrainingTasks: React.FC = () => {
         />
       </Card>
 
-      {/* 任务详情弹窗（含训练日志） */}
       <Modal
         title={`任务详情 #${selectedTask?.id}`}
         open={detailModalVisible}
@@ -420,162 +553,188 @@ const TrainingTasks: React.FC = () => {
         ].filter(Boolean)}
       >
         {selectedTask && (
-          <Tabs defaultActiveKey="info">
-            <TabPane tab="基本信息" key="info">
-              <Descriptions bordered column={2}>
-                <Descriptions.Item label="任务ID">{selectedTask.id}</Descriptions.Item>
-                <Descriptions.Item label="模型ID">{selectedTask.model_id}</Descriptions.Item>
-                <Descriptions.Item label="状态">
-                  {getStatusTag(selectedTask.status)}
-                </Descriptions.Item>
-                <Descriptions.Item label="开始时间">
-                  {selectedTask.start_time ? new Date(selectedTask.start_time).toLocaleString() : '-'}
-                </Descriptions.Item>
-                <Descriptions.Item label="结束时间">
-                  {selectedTask.end_time ? new Date(selectedTask.end_time).toLocaleString() : '-'}
-                </Descriptions.Item>
-                <Descriptions.Item label="耗时">
-                  {selectedTask.duration ? `${Math.floor(selectedTask.duration / 60)}分${Math.floor(selectedTask.duration % 60)}秒` : '-'}
-                </Descriptions.Item>
-              </Descriptions>
+          <Tabs defaultActiveKey="info" items={[
+            {
+              key: 'info',
+              label: '基本信息',
+              children: (
+                <>
+                  <Descriptions bordered column={2}>
+                    <Descriptions.Item label="任务ID">{selectedTask.id}</Descriptions.Item>
+                    <Descriptions.Item label="模型ID">{selectedTask.model_id}</Descriptions.Item>
+                    <Descriptions.Item label="状态">
+                      {getStatusTag(selectedTask.status)}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="开始时间">
+                      {selectedTask.start_time ? new Date(selectedTask.start_time).toLocaleString() : '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="结束时间">
+                      {selectedTask.end_time ? new Date(selectedTask.end_time).toLocaleString() : '-'}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="耗时">
+                      {selectedTask.duration ? `${Math.floor(selectedTask.duration / 60)}分${Math.floor(selectedTask.duration % 60)}秒` : '-'}
+                    </Descriptions.Item>
+                  </Descriptions>
 
-              {selectedTask.metrics && (
-                <div style={{ marginTop: 24 }}>
-                  <h3>训练指标</h3>
-                  <Row gutter={[16, 16]}>
-                    {Object.entries(selectedTask.metrics).map(([key, value]: [string, any]) => {
-                      if (typeof value === 'number') {
-                        return (
-                          <Col span={8} key={key}>
-                            <Card size="small">
-                              <Statistic
-                                title={key.toUpperCase()}
-                                value={typeof value === 'number' ? value.toFixed(4) : value}
-                              />
-                            </Card>
-                          </Col>
-                        )
-                      }
-                      return null
-                    })}
-                  </Row>
-                </div>
-              )}
+                  {selectedTask.metrics && (
+                    <div style={{ marginTop: 24 }}>
+                      <h3>训练指标</h3>
+                      <Row gutter={[16, 16]}>
+                        {Object.entries(selectedTask.metrics).map(([key, value]: [string, any]) => {
+                          if (typeof value === 'number') {
+                            return (
+                              <Col span={8} key={key}>
+                                <Card size="small">
+                                  <Statistic
+                                    title={key.toUpperCase()}
+                                    value={typeof value === 'number' ? value.toFixed(4) : value}
+                                  />
+                                </Card>
+                              </Col>
+                            )
+                          }
+                          return null
+                        })}
+                      </Row>
+                    </div>
+                  )}
 
-              {selectedTask.error_message && (
-                <div style={{ marginTop: 24 }}>
-                  <h3 style={{ color: '#f5222d' }}>错误信息</h3>
-                  <div style={{ padding: 16, background: '#fff1f0', borderRadius: 4, color: '#f5222d' }}>
-                    {selectedTask.error_message}
-                  </div>
-                </div>
-              )}
-            </TabPane>
-
-            <TabPane
-              tab={
+                  {selectedTask.error_message && (
+                    <div style={{ marginTop: 24 }}>
+                      <h3 style={{ color: '#f5222d' }}>错误信息</h3>
+                      <div style={{ padding: 16, background: '#fff1f0', borderRadius: 4, color: '#f5222d' }}>
+                        {selectedTask.error_message}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ),
+            },
+            {
+              key: 'logs',
+              label: (
                 <Space>
                   <FileTextOutlined />
                   训练日志
                 </Space>
-              }
-              key="logs"
-            >
-              <div
-                style={{
-                  background: '#1e1e1e',
-                  color: '#d4d4d4',
-                  padding: 16,
-                  borderRadius: 8,
-                  fontFamily: 'Consolas, Monaco, "Courier New", monospace',
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  maxHeight: 400,
-                  overflowY: 'auto',
-                }}
-              >
-                {logsLoading ? (
-                  <div style={{ textAlign: 'center', padding: 40 }}>
-                    <LoadingOutlined /> 加载日志中...
+              ),
+              children: (
+                <>
+                  <div
+                    style={{
+                      background: '#1e1e1e',
+                      color: '#d4d4d4',
+                      padding: 16,
+                      borderRadius: 8,
+                      fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                      fontSize: 13,
+                      lineHeight: 1.6,
+                      maxHeight: 400,
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {logsLoading ? (
+                      <div style={{ textAlign: 'center', padding: 40 }}>
+                        <LoadingOutlined /> 加载日志中...
+                      </div>
+                    ) : logs.length > 0 ? (
+                      logs.map((line, idx) => (
+                        <div key={idx} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                          {line}
+                        </div>
+                      ))
+                    ) : (
+                      <div style={{ color: '#666', textAlign: 'center', padding: 40 }}>
+                        暂无训练日志
+                      </div>
+                    )}
+                    <div ref={logsEndRef} />
                   </div>
-                ) : logs.length > 0 ? (
-                  logs.map((line, idx) => (
-                    <div key={idx} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                      {line}
-                    </div>
-                  ))
-                ) : (
-                  <div style={{ color: '#666', textAlign: 'center', padding: 40 }}>
-                    暂无训练日志
+                  <div style={{ marginTop: 8, textAlign: 'right' }}>
+                    <Button
+                      size="small"
+                      icon={<ReloadOutlined />}
+                      onClick={() => selectedTask && fetchLogs(selectedTask.id)}
+                    >
+                      刷新日志
+                    </Button>
                   </div>
-                )}
-                <div ref={logsEndRef} />
-              </div>
-              <div style={{ marginTop: 8, textAlign: 'right' }}>
-                <Button
-                  size="small"
-                  icon={<ReloadOutlined />}
-                  onClick={() => selectedTask && fetchLogs(selectedTask.id)}
-                >
-                  刷新日志
-                </Button>
-              </div>
-            </TabPane>
-          </Tabs>
+                </>
+              ),
+            },
+          ]} />
         )}
       </Modal>
 
-      {/* 执行回测弹窗 */}
       <Modal
         title="执行回测"
         open={backtestModalVisible}
-        onCancel={() => setBacktestModalVisible(false)}
-        onOk={handleRunBacktest}
-        confirmLoading={backtestLoading}
-        okText="开始回测"
+        onCancel={() => { if (!backtestLoading) setBacktestModalVisible(false) }}
+        footer={backtestLoading ? null : [
+          <Button key="cancel" onClick={() => setBacktestModalVisible(false)}>取消</Button>,
+          <Button key="ok" type="primary" onClick={handleRunBacktest}>开始回测</Button>,
+        ]}
         width={600}
       >
-        <Form form={backtestForm} layout="vertical">
-          <Form.Item
-            name="start_date"
-            label="回测日期范围"
-            rules={[{ required: true, message: '请选择回测日期范围' }]}
-          >
-            <DatePicker.RangePicker style={{ width: '100%' }} />
-          </Form.Item>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="initial_capital"
-                label="初始资金"
-                initialValue={100000}
-              >
-                <InputNumber
-                  min={10000}
-                  max={10000000}
-                  step={10000}
-                  style={{ width: '100%' }}
-                  addonAfter="元"
-                />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="commission_rate"
-                label="手续费率"
-                initialValue={0.0003}
-              >
-                <InputNumber
-                  min={0}
-                  max={0.01}
-                  step={0.0001}
-                  style={{ width: '100%' }}
-                  precision={4}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
+        {backtestLoading ? (
+          <div style={{ padding: '20px 0' }}>
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <LoadingOutlined style={{ fontSize: 48, color: '#1890ff' }} />
+            </div>
+            <Progress
+              percent={backtestProgress}
+              status="active"
+              strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
+            />
+            <div style={{ textAlign: 'center', color: '#666', marginTop: 8 }}>
+              {backtestMessage}
+            </div>
+          </div>
+        ) : (
+          <Form form={backtestForm} layout="vertical">
+            <Form.Item
+              name="start_date"
+              label="回测日期范围"
+              rules={[{ required: true, message: '请选择回测日期范围' }]}
+            >
+              <DatePicker.RangePicker style={{ width: '100%' }} />
+            </Form.Item>
+            <Row gutter={16}>
+              <Col span={12}>
+                <Form.Item
+                  name="initial_capital"
+                  label="初始资金"
+                  initialValue={100000}
+                >
+                  <Space.Compact style={{ width: '100%' }}>
+                    <InputNumber
+                      min={10000}
+                      max={10000000}
+                      step={10000}
+                      style={{ width: 'calc(100% - 32px)' }}
+                    />
+                    <Input disabled value="元" style={{ width: 32, textAlign: 'center', color: '#999' }} />
+                  </Space.Compact>
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item
+                  name="commission_rate"
+                  label="手续费率"
+                  initialValue={0.0003}
+                >
+                  <InputNumber
+                    min={0}
+                    max={0.01}
+                    step={0.0001}
+                    style={{ width: '100%' }}
+                    precision={4}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          </Form>
+        )}
       </Modal>
     </div>
   )
