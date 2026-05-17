@@ -302,17 +302,18 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         <div style={{
           background: '#fffbe6',
           borderTop: '1px solid #ffe58f',
-          padding: '4px 12px',
-          fontSize: 12,
+          padding: '2px 8px',
+          fontSize: 10,
           color: '#ad6800',
           textAlign: 'center',
+          lineHeight: '16px',
           position: 'fixed',
           bottom: 56,
           left: 0,
           right: 0,
           zIndex: 99,
         }}>
-          ⚠️ 免责声明：本平台所有数据和分析结果仅供参考，不构成任何投资建议。所有预测基于日K线历史数据，过去的表现不代表未来收益。投资有风险，入市需谨慎。
+          ⚠️ 仅供参考，不构成投资建议。基于日K线数据，投资有风险。
         </div>
         <OnboardingGuide
           open={onboardingVisible}
@@ -439,14 +440,15 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           {children}
         </Content>
       </Layout>
-      {/* 免责声明 */}
       <div style={{
         background: '#fffbe6',
         borderTop: '1px solid #ffe58f',
-        padding: '6px 24px',
-        fontSize: 12,
+        padding: '4px 24px',
+        fontSize: 11,
         color: '#ad6800',
         textAlign: 'center',
+        lineHeight: '18px',
+        flexShrink: 0,
       }}>
         ⚠️ 免责声明：本平台所有数据和分析结果仅供参考，不构成任何投资建议。所有预测基于日K线历史数据，过去的表现不代表未来收益。投资有风险，入市需谨慎。
       </div>

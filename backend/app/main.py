@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.config import settings
-from app.core.database import init_db, Base
+from app.core.database import init_db, SessionLocal, Base
 from app.core.logging import setup_logging
 from app.models.stock import Stock, StockPrice
 from app.models.user_model import UserModel
@@ -16,6 +16,32 @@ from app.models.payment import PaymentConfig, PaymentOrder
 from app.models.user_prefs import UserStockPrefs, UserModelPrefs
 from app.models.system_config import SystemConfig
 from app.api import api_router
+from app.auth import get_password_hash
+
+
+def _ensure_default_admin():
+    """确保默认管理员账号存在（首次启动时自动创建）"""
+    db = SessionLocal()
+    try:
+        existing = db.query(User).filter(User.username == "admin").first()
+        if not existing:
+            admin = User(
+                username="admin",
+                email="admin@astock.local",
+                hashed_password=get_password_hash("admin123"),
+                is_active=True,
+                is_admin=True,
+            )
+            db.add(admin)
+            db.commit()
+            print("[OK] 默认管理员账号已创建: admin / admin123")
+        else:
+            print("[OK] 管理员账号已存在")
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] 创建默认管理员失败: {e}")
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -25,6 +51,7 @@ async def lifespan(app: FastAPI):
     print(f"[启动] {settings.APP_NAME} v{settings.APP_VERSION}")
     init_db()
     print("[OK] 数据库初始化完成")
+    _ensure_default_admin()
 
     yield
 
