@@ -126,7 +126,7 @@ const AdminUsers: React.FC = () => {
   const handleResetPassword = async (values: { new_password: string }) => {
     if (!resetUserId) return
     try {
-      const result = await adminApi.resetUserPassword(resetUserId, values)
+      const result: any = await adminApi.resetUserPassword(resetUserId, values)
       message.success(result.message || '密码重置成功')
       setResetModalVisible(false)
       resetForm.resetFields()
@@ -138,7 +138,7 @@ const AdminUsers: React.FC = () => {
 
   const handleToggleActive = async (userId: number) => {
     try {
-      const result = await adminApi.toggleUserActive(userId)
+      const result: any = await adminApi.toggleUserActive(userId)
       message.success(result.message || '操作成功')
       fetchUsers()
     } catch (error: any) {

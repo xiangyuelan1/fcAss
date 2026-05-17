@@ -80,7 +80,7 @@ const ModelList: React.FC = () => {
 
   const handleClone = async (model: UserModel) => {
     try {
-      const result = await modelApi.cloneModel(model.id, `${model.name}_副本`)
+      const result: any = await modelApi.cloneModel(model.id, `${model.name}_副本`)
       if (result.success) {
         message.success('克隆成功')
         fetchModels()
@@ -92,7 +92,7 @@ const ModelList: React.FC = () => {
 
   const handleTrain = async (model: UserModel) => {
     try {
-      const result = await trainingApi.createTask({
+      await trainingApi.createTask({
         model_id: model.id,
         config: {},
       })
