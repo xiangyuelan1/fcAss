@@ -23,11 +23,13 @@ import {
   QuestionCircleOutlined,
   StarOutlined,
   BellOutlined,
+  BulbOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/store'
 import { authApi, messageApi } from '@/services/api'
 import OnboardingGuide from '@/components/OnboardingGuide'
+import MascotBull from '@/components/MascotBull'
 
 const { Header, Sider, Content } = Layout
 
@@ -115,6 +117,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: '社区',
       children: [
         { key: '/community', icon: <GlobalOutlined />, label: '模型广场' },
+        { key: '/community/daily-guess', icon: <BulbOutlined />, label: '每日一猜' },
         { key: '/community/pk', icon: <TrophyOutlined />, label: 'PK竞技' },
         { key: '/community/leaderboard', icon: <TrophyOutlined />, label: '排行榜' },
       ],
@@ -330,14 +333,14 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           right: 0,
           zIndex: 99,
         }}>
-          ⚠️ 仅供参考，不构成投资建议。基于日K线数据，投资有风险。
+          🐂 仅供参考，牛牛不对投资决策负责~
         </div>
         <OnboardingGuide
           open={onboardingVisible}
           onClose={() => setOnboardingVisible(false)}
         />
         <Modal
-          title="⚠️ 免责声明"
+          title="🐂 牛牛提醒：免责声明"
           open={disclaimerVisible}
           closable={false}
           maskClosable={false}
@@ -350,6 +353,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </Button>,
           ]}
         >
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+            <MascotBull mood="chill" size="medium" message="" />
+          </div>
           <div style={{ lineHeight: 2 }}>
             <p>1. 本平台所有数据和分析结果<strong>仅供参考</strong>，不构成任何投资建议。</p>
             <p>2. 所有预测基于<strong>日K线历史数据</strong>，过去的表现不代表未来收益。</p>
@@ -479,7 +485,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           lineHeight: '18px',
           flexShrink: 0,
         }}>
-          ⚠️ 免责声明：本平台所有数据和分析结果仅供参考，不构成任何投资建议。所有预测基于日K线历史数据，过去的表现不代表未来收益。投资有风险，入市需谨慎。
+          🐂 牛牛提醒：本平台所有数据仅供参考，不构成投资建议。基于日K线数据，投资有风险，入市需谨慎。
         </div>
       </Layout>
       <OnboardingGuide
@@ -487,7 +493,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         onClose={() => setOnboardingVisible(false)}
       />
       <Modal
-        title="⚠️ 免责声明"
+        title="🐂 牛牛提醒：免责声明"
         open={disclaimerVisible}
         closable={false}
         maskClosable={false}
@@ -500,6 +506,9 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           </Button>,
         ]}
       >
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+          <MascotBull mood="chill" size="medium" message="" />
+        </div>
         <div style={{ lineHeight: 2 }}>
           <p>1. 本平台所有数据和分析结果<strong>仅供参考</strong>，不构成任何投资建议。</p>
           <p>2. 所有预测基于<strong>日K线历史数据</strong>，过去的表现不代表未来收益。</p>

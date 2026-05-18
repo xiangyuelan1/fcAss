@@ -6,6 +6,7 @@ from app.models.system_config import SystemConfig
 from app.models.community import CommunityModel, CommunitySignal, CommunityLike, UserPoints, PointTransaction, PKChallenge, Achievement, DailyChallengeSubmission
 from app.models.message import Message
 from app.models.watchlist import Watchlist, WatchlistItem
+from app.models.daily_guess import DailyGuessStock, DailyGuessVote
 
 __all__ = [
     "Stock",
@@ -27,4 +28,6 @@ __all__ = [
     "Message",
     "Watchlist",
     "WatchlistItem",
+    "DailyGuessStock",
+    "DailyGuessVote",
 ]

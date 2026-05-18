@@ -50,6 +50,7 @@ import {
 } from '@ant-design/icons'
 import { modelApi, dataApi, featureApi, watchlistApi } from '@/services/api'
 import { ModelType, Indicator, Stock, ModelTemplate } from '@/types'
+import MascotBull from '@/components/MascotBull'
 import dayjs from 'dayjs'
 
 const { RangePicker } = DatePicker
@@ -1267,7 +1268,7 @@ const ModelBuilder: React.FC = () => {
 
           {templates.length === 0 && !templatesLoading && (
             <div style={{ textAlign: 'center', padding: '32px 0', color: '#999' }}>
-              暂无可用模板
+              <MascotBull mood="thinking" size="medium" message="选个模板，让牛牛帮你开始" />
             </div>
           )}
         </Card>

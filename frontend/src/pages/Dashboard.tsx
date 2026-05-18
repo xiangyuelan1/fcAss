@@ -26,6 +26,8 @@ import { useNavigate } from 'react-router-dom'
 import { dataApi, modelApi, trainingApi, backtestApi, pointsApi, communityApi } from '@/services/api'
 import { UserModel, TrainingTask, DailyChallenge } from '@/types'
 import OnboardingGuide, { isOnboardingCompleted } from '@/components/OnboardingGuide'
+import DailyGuess from '@/components/DailyGuess'
+import MascotBull from '@/components/MascotBull'
 
 interface StaleModel {
   model_id: number
@@ -236,9 +238,12 @@ const Dashboard: React.FC = () => {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <h1 className="page-title" style={{ marginBottom: 0 }}>
-          A股预测平台
-        </h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <MascotBull mood="chill" size="small" />
+          <h1 className="page-title" style={{ marginBottom: 0 }}>
+            A股预测平台
+          </h1>
+        </div>
         <Button
           type="link"
           icon={<QuestionCircleOutlined />}
@@ -252,8 +257,11 @@ const Dashboard: React.FC = () => {
         看看大家都在预测什么，参与每日挑战，或创建自己的预测模型
       </p>
 
-      {/* ===== 社区动态：最显眼的位置 ===== */}
+      {/* ===== 每日一猜 ===== */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        <Col xs={24} lg={10}>
+          <DailyGuess compact />
+        </Col>
         <Col xs={24} lg={14}>
           <Card
             title={

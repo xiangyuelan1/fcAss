@@ -32,6 +32,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { modelApi, trainingApi, communityApi } from '@/services/api'
 import { UserModel } from '@/types'
+import MascotBull from '@/components/MascotBull'
 
 const ModelList: React.FC = () => {
   const navigate = useNavigate()
@@ -384,6 +385,13 @@ const ModelList: React.FC = () => {
           rowKey="id"
           loading={loading}
           pagination={{ pageSize: 10 }}
+          locale={{
+            emptyText: (
+              <div style={{ padding: '24px 0' }}>
+                <MascotBull mood="chill" size="medium" message="还没有模型？牛牛等你来创建" />
+              </div>
+            ),
+          }}
         />
       </Card>
     </div>

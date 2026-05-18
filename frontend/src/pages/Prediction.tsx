@@ -26,6 +26,8 @@ import {
 } from '@ant-design/icons'
 import { predictionApi, trainingApi, modelApi } from '@/services/api'
 import { TrainingTask, UserModel } from '@/types'
+import MascotBull from '@/components/MascotBull'
+import { PredictionResult, PredictionAnimation, deriveConfidence, labelToDirection } from '@/components/PredictionFun'
 
 interface PredictionRecord {
   task_id: number
@@ -137,7 +139,7 @@ const Prediction: React.FC = () => {
       if (typeof detail === 'string') {
         message.error(detail)
       } else {
-        message.error('预测失败')
+        message.error('牛牛也懵了，这次预测没能完成')
       }
     } finally {
       setPredicting(false)
@@ -256,7 +258,12 @@ const Prediction: React.FC = () => {
       {tasks.length === 0 && (
         <Alert
           message="暂无可用的训练任务"
-          description="请先完成模型训练后再进行预测。训练完成后，在此页面即可使用对应模型进行预测。"
+          description={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 8 }}>
+              <MascotBull mood="thinking" size="small" message="" />
+              <span>请先完成模型训练后再进行预测。训练完成后，在此页面即可使用对应模型进行预测。</span>
+            </div>
+          }
           type="info"
           showIcon
           action={
@@ -356,72 +363,75 @@ const Prediction: React.FC = () => {
       </Card>
 
       {/* 最新预测结果 */}
-      {latestResult && (
-        <Card title="最新预测结果" style={{ marginBottom: 24 }}>
-          <Row gutter={[16, 16]}>
-            <Col xs={24} md={8}>
-              <Card
-                style={{
-                  background: getLabelStyle(latestResult.prediction_label).bg,
-                  textAlign: 'center',
-                }}
-              >
-                <Statistic
-                  title="预测方向"
-                  value={latestResult.prediction_label}
-                  prefix={getLabelStyle(latestResult.prediction_label).icon}
-                  valueStyle={{
-                    color: getLabelStyle(latestResult.prediction_label).color,
-                    fontSize: 32,
+      {latestResult && (() => {
+        const direction = labelToDirection(latestResult.prediction_label)
+        const confidence = deriveConfidence(latestResult.prediction)
+        const stock = predictableStocks.find(s => s.code === latestResult.stock_code)
+        return (
+          <Card title="最新预测结果" style={{ marginBottom: 24 }}>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} md={12}>
+                <Card
+                  style={{
+                    background: getLabelStyle(latestResult.prediction_label).bg,
+                    borderRadius: 12,
                   }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} md={8}>
-              <Card>
-                <Statistic
-                  title="预测值"
-                  value={latestResult.prediction}
-                  precision={6}
-                  valueStyle={{
-                    color: latestResult.prediction > 0 ? '#f5222d' : '#52c41a',
-                  }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} md={8}>
-              <Card>
-                <Statistic
-                  title="最新收盘价"
-                  value={latestResult.latest_data?.close || 0}
-                  prefix="¥"
-                  precision={2}
-                />
-                <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
-                  数据日期: {latestResult.latest_data?.date || '-'}
-                </div>
-              </Card>
-            </Col>
-          </Row>
+                >
+                  <PredictionResult
+                    direction={direction}
+                    confidence={confidence}
+                    stockName={stock?.name}
+                    stockCode={latestResult.stock_code}
+                  />
+                </Card>
+              </Col>
+              <Col xs={24} md={12}>
+                <Row gutter={[16, 16]}>
+                  <Col span={24}>
+                    <Card>
+                      <PredictionAnimation
+                        direction={direction}
+                        value={latestResult.prediction}
+                        label={latestResult.prediction_label}
+                      />
+                    </Card>
+                  </Col>
+                  <Col span={24}>
+                    <Card>
+                      <Statistic
+                        title="最新收盘价"
+                        value={latestResult.latest_data?.close || 0}
+                        prefix="¥"
+                        precision={2}
+                      />
+                      <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
+                        数据日期: {latestResult.latest_data?.date || '-'}
+                      </div>
+                    </Card>
+                  </Col>
+                </Row>
+              </Col>
+            </Row>
 
-          <Alert
-            style={{ marginTop: 16 }}
-            message="预测说明"
-            description={
-              latestResult.prediction_label === '看涨'
-                ? `模型预测 ${latestResult.stock_code} 短期有上涨趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
-                : latestResult.prediction_label === '看跌'
-                ? `模型预测 ${latestResult.stock_code} 短期有下跌趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
-                : `模型预测 ${latestResult.stock_code} 短期走势震荡，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
-            }
-            type={
-              latestResult.prediction_label === '看涨' ? 'success' :
-              latestResult.prediction_label === '看跌' ? 'warning' : 'info'
-            }
-            showIcon
-          />
-        </Card>
-      )}
+            <Alert
+              style={{ marginTop: 16 }}
+              message="预测说明"
+              description={
+                latestResult.prediction_label === '看涨'
+                  ? `模型预测 ${latestResult.stock_code} 短期有上涨趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+                  : latestResult.prediction_label === '看跌'
+                  ? `模型预测 ${latestResult.stock_code} 短期有下跌趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+                  : `模型预测 ${latestResult.stock_code} 短期走势震荡，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+              }
+              type={
+                latestResult.prediction_label === '看涨' ? 'success' :
+                latestResult.prediction_label === '看跌' ? 'warning' : 'info'
+              }
+              showIcon
+            />
+          </Card>
+        )
+      })()}
 
       {/* 批量预测结果 */}
       {batchResults.length > 0 && (

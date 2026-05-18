@@ -25,6 +25,7 @@ const CommunityModelDetail = React.lazy(() => import('@/pages/CommunityModelDeta
 const Profile = React.lazy(() => import('@/pages/Profile'))
 const ContactUs = React.lazy(() => import('@/pages/ContactUs'))
 const AdminMessages = React.lazy(() => import('@/pages/AdminMessages'))
+const DailyGuessPage = React.lazy(() => import('@/pages/DailyGuessPage'))
 
 const LazyFallback = () => (
   <div style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -85,6 +86,7 @@ const App: React.FC = () => {
             <Route path="/community/pk" element={<Suspense fallback={<LazyFallback />}><PKArena /></Suspense>} />
             <Route path="/community/leaderboard" element={<Suspense fallback={<LazyFallback />}><Leaderboard /></Suspense>} />
             <Route path="/community/model/:id" element={<Suspense fallback={<LazyFallback />}><CommunityModelDetail /></Suspense>} />
+            <Route path="/community/daily-guess" element={<Suspense fallback={<LazyFallback />}><DailyGuessPage /></Suspense>} />
             <Route path="/profile" element={<Suspense fallback={<LazyFallback />}><Profile /></Suspense>} />
             <Route path="/contact" element={<Suspense fallback={<LazyFallback />}><ContactUs /></Suspense>} />
             <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />

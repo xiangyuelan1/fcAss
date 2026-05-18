@@ -34,6 +34,8 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { trainingApi, modelApi, backtestApi } from '@/services/api'
 import { TrainingTask, UserModel } from '@/types'
+import { TrainingCompleteEffect } from '@/components/TrainingCompleteEffect'
+import MascotBull from '@/components/MascotBull'
 import dayjs from 'dayjs'
 
 const TrainingTasks: React.FC = () => {
@@ -57,6 +59,8 @@ const TrainingTasks: React.FC = () => {
   const [backtestMessage, setBacktestMessage] = useState('')
   const [backtestForm] = Form.useForm()
   const [backtestResults, setBacktestResults] = useState<Record<number, any>>({})
+
+  const [trainingEffect, setTrainingEffect] = useState<'completed' | 'failed' | null>(null)
 
   useEffect(() => {
     fetchTasks()
@@ -101,6 +105,9 @@ const TrainingTasks: React.FC = () => {
         if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
           es.close()
           delete sseRefs.current[taskId]
+          if (data.status === 'completed' || data.status === 'failed') {
+            setTrainingEffect(data.status)
+          }
           fetchTasks()
         }
       } catch {}
@@ -125,7 +132,7 @@ const TrainingTasks: React.FC = () => {
         fetchBacktestResults(completedTaskIds)
       }
     } catch (error) {
-      message.error('获取训练任务失败')
+      message.error('哎呀，模型训练翻车了，牛牛建议换个参数试试？')
     } finally {
       setLoading(false)
     }
@@ -512,6 +519,13 @@ const TrainingTasks: React.FC = () => {
           rowKey="id"
           loading={loading}
           pagination={{ pageSize: 10 }}
+          locale={{
+            emptyText: (
+              <div style={{ padding: '24px 0' }}>
+                <MascotBull mood="chill" size="medium" message="还没有训练任务？去创建模型开始训练吧" />
+              </div>
+            ),
+          }}
         />
       </Card>
 
@@ -736,6 +750,14 @@ const TrainingTasks: React.FC = () => {
           </Form>
         )}
       </Modal>
+
+      {trainingEffect && (
+        <TrainingCompleteEffect
+          status={trainingEffect}
+          autoCloseMs={3500}
+          onClose={() => setTrainingEffect(null)}
+        />
+      )}
     </div>
   )
 }

@@ -16,6 +16,7 @@ from app.models.payment import PaymentConfig, PaymentOrder
 from app.models.user_prefs import UserStockPrefs, UserModelPrefs
 from app.models.system_config import SystemConfig
 from app.models.watchlist import Watchlist, WatchlistItem
+from app.models.daily_guess import DailyGuessStock, DailyGuessVote
 from app.api import api_router
 from app.auth import get_password_hash
 

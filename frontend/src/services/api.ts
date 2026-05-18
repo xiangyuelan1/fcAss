@@ -455,4 +455,10 @@ export const watchlistApi = {
   getStocks: (id: number) => api.get(`/watchlists/${id}/stocks`),
 };
 
+export const dailyGuessApi = {
+  getToday: () => api.get('/daily-guess/today'),
+  vote: (direction: 'up' | 'down') => api.post('/daily-guess/vote', { direction }),
+  getHistory: () => api.get('/daily-guess/history'),
+};
+
 export default api;
