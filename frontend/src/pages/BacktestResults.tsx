@@ -512,7 +512,12 @@ const BacktestResults: React.FC = () => {
 
 export default BacktestResults
 
-/** 回测图表组件：权益曲线 + 回撤图 + 每日收益 */
+/** 回测图表组件：权益曲线 + 回撤图 + 每日收益
+ *
+ * 使用 @ant-design/charts v2 API:
+ * - Line: xField / yField / colorField / smooth / legend / tooltip
+ * - Area: 与 Line 类似，但自带面积填充，用于回撤图
+ */
 const EquityCharts: React.FC<{ equityCurve: EquityPoint[]; initialCapital: number }> = ({
   equityCurve,
   initialCapital,
@@ -553,56 +558,120 @@ const EquityCharts: React.FC<{ equityCurve: EquityPoint[]; initialCapital: numbe
     return result
   }, [equityCurve])
 
-  const baseLineConfig = {
-    xField: 'date',
-    yField: 'value',
-    height: 300,
-    smooth: true,
-    xAxis: { label: { autoRotate: true, style: { fontSize: 11 } } } as any,
-    yAxis: { label: { formatter: (v: string) => Number(v).toLocaleString(), style: { fontSize: 11 } } } as any,
-    tooltip: { shared: true } as any,
-  }
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <Card size="small" title="权益曲线" style={{ marginBottom: 0 }}>
-        <Line
-          {...baseLineConfig}
-          data={equityData}
-          seriesField="type"
-          color={['#1890ff', '#52c41a', '#faad14']}
-          yAxis={{
-            ...baseLineConfig.yAxis,
-            label: { ...baseLineConfig.yAxis.label, formatter: (v: string) => `¥${Number(v).toLocaleString()}` },
-          }}
-          legend={{ position: 'top' } as any}
-        />
+        <ChartErrorBoundary>
+          <Line
+            data={equityData}
+            xField="date"
+            yField="value"
+            colorField="type"
+            smooth
+            height={300}
+            color={['#1890ff', '#52c41a', '#faad14']}
+            yAxis={{
+              label: {
+                formatter: (v: string) => `¥${Number(v).toLocaleString()}`,
+              },
+            }}
+            xAxis={{
+              label: {
+                autoRotate: true,
+              },
+            }}
+            legend={{
+              position: 'top' as const,
+            }}
+            tooltip={{
+              shared: true,
+            }}
+          />
+        </ChartErrorBoundary>
       </Card>
 
       <Card size="small" title="回撤 (%)" style={{ marginBottom: 0 }}>
-        <Line
-          {...baseLineConfig}
-          data={drawdownData}
-          color="#f5222d"
-          yAxis={{
-            ...baseLineConfig.yAxis,
-            label: { ...baseLineConfig.yAxis.label, formatter: (v: string) => `${Number(v).toFixed(1)}%` },
-          }}
-          areaStyle={{ fill: 'l(270) 0:rgba(245,34,45,0.25) 1:rgba(245,34,45,0.02)' } as any}
-        />
+        <ChartErrorBoundary>
+          <Line
+            data={drawdownData}
+            xField="date"
+            yField="value"
+            height={300}
+            color="#f5222d"
+            smooth
+            yAxis={{
+              label: {
+                formatter: (v: string) => `${Number(v).toFixed(1)}%`,
+              },
+            }}
+            xAxis={{
+              label: {
+                autoRotate: true,
+              },
+            }}
+            tooltip={{
+              shared: true,
+            }}
+          />
+        </ChartErrorBoundary>
       </Card>
 
       <Card size="small" title="每日收益 (%)" style={{ marginBottom: 0 }}>
-        <Line
-          {...baseLineConfig}
-          data={dailyReturnData}
-          color="#722ed1"
-          yAxis={{
-            ...baseLineConfig.yAxis,
-            label: { ...baseLineConfig.yAxis.label, formatter: (v: string) => `${Number(v).toFixed(2)}%` },
-          }}
-        />
+        <ChartErrorBoundary>
+          <Line
+            data={dailyReturnData}
+            xField="date"
+            yField="value"
+            height={300}
+            color="#722ed1"
+            smooth
+            yAxis={{
+              label: {
+                formatter: (v: string) => `${Number(v).toFixed(2)}%`,
+              },
+            }}
+            xAxis={{
+              label: {
+                autoRotate: true,
+              },
+            }}
+            tooltip={{
+              shared: true,
+            }}
+          />
+        </ChartErrorBoundary>
       </Card>
     </div>
   )
+}
+
+/** 图表渲染错误边界，防止单个图表崩溃导致整个页面白屏 */
+class ChartErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>
+          图表渲染失败，请刷新页面重试
+          <br />
+          <Button
+            type="link"
+            size="small"
+            onClick={() => this.setState({ hasError: false })}
+          >
+            重试
+          </Button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
 }

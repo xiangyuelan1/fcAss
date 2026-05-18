@@ -368,3 +368,61 @@ class DataService:
         """获取所有行业列表（从数据库中已存的股票记录）"""
         industries = self.db.query(Stock.industry).distinct().all()
         return [ind[0] for ind in industries if ind[0]]
+
+    def sync_stock_pool(self) -> int:
+        """同步A股股票池（仅代码和名称，不获取价格数据）
+
+        从 akshare 获取沪深A股列表，增量更新 stocks 表。
+        新增不存在的股票记录，更新已有股票的名称。
+
+        Returns:
+            新增的股票数量
+        """
+        import akshare as ak
+
+        all_stocks = []
+
+        # 沪市主板
+        try:
+            df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
+            for _, row in df_sh.iterrows():
+                code = str(row.get('证券代码', '')).zfill(6)
+                name = str(row.get('证券简称', ''))
+                if code and name and not name.startswith('N'):
+                    all_stocks.append({'code': code, 'name': name, 'exchange': 'SH'})
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"获取沪市股票列表失败: {e}")
+
+        # 深市
+        try:
+            df_sz = ak.stock_info_sz_name_code(indicator="A股列表")
+            for _, row in df_sz.iterrows():
+                code = str(row.get('A股代码', '')).zfill(6)
+                name = str(row.get('A股简称', ''))
+                if code and name and not name.startswith('N'):
+                    all_stocks.append({'code': code, 'name': name, 'exchange': 'SZ'})
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"获取深市股票列表失败: {e}")
+
+        if not all_stocks:
+            return 0
+
+        # 增量更新：新增/更新名称
+        new_count = 0
+        for item in all_stocks:
+            existing = self.db.query(Stock).filter(Stock.code == item['code']).first()
+            if not existing:
+                stock = Stock(
+                    code=item['code'],
+                    name=item['name'],
+                    exchange=item.get('exchange'),
+                )
+                self.db.add(stock)
+                new_count += 1
+            elif existing.name != item['name']:
+                existing.name = item['name']
+
+        self.db.commit()
+        return new_count

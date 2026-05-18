@@ -13,6 +13,9 @@ import {
   Col,
   Statistic,
   Segmented,
+  Modal,
+  Input,
+  Radio,
 } from 'antd'
 import {
   PlusOutlined,
@@ -28,6 +31,9 @@ import {
   HeartOutlined,
   HeartFilled,
   SendOutlined,
+  GlobalOutlined,
+  LinkOutlined,
+  LockOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { modelApi, trainingApi, communityApi } from '@/services/api'
@@ -40,6 +46,13 @@ const ModelList: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState<string>('全部')
   const [publishedModelIds, setPublishedModelIds] = useState<Set<number>>(new Set())
+
+  // 发布弹窗状态
+  const [publishModalVisible, setPublishModalVisible] = useState(false)
+  const [publishingModel, setPublishingModel] = useState<UserModel | null>(null)
+  const [publishDescription, setPublishDescription] = useState('')
+  const [publishVisibility, setPublishVisibility] = useState<string>('public')
+  const [publishing, setPublishing] = useState(false)
 
   useEffect(() => {
     fetchModels()
@@ -134,13 +147,24 @@ const ModelList: React.FC = () => {
     }
   }
 
-  const handlePublish = async (model: UserModel) => {
+  const openPublishModal = (model: UserModel) => {
+    setPublishingModel(model)
+    setPublishDescription(model.description || '')
+    setPublishVisibility('public')
+    setPublishModalVisible(true)
+  }
+
+  const handlePublish = async () => {
+    if (!publishingModel) return
+    setPublishing(true)
     try {
       await communityApi.publishModel({
-        model_id: model.id,
-        description: model.description || '',
+        model_id: publishingModel.id,
+        description: publishDescription,
+        visibility: publishVisibility,
       })
       message.success('发布到社区成功，+10积分')
+      setPublishModalVisible(false)
       fetchModels()
       fetchPublishedModelIds()
     } catch (error: any) {
@@ -150,6 +174,8 @@ const ModelList: React.FC = () => {
       } else {
         message.error('发布失败')
       }
+    } finally {
+      setPublishing(false)
     }
   }
 
@@ -295,7 +321,7 @@ const ModelList: React.FC = () => {
                 <Button
                   type="text"
                   icon={<SendOutlined />}
-                  onClick={() => handlePublish(record)}
+                  onClick={() => openPublishModal(record)}
                 />
               </Tooltip>
             )
@@ -394,6 +420,66 @@ const ModelList: React.FC = () => {
           }}
         />
       </Card>
+
+      {/* 发布到社区弹窗 */}
+      <Modal
+        title="发布到社区"
+        open={publishModalVisible}
+        onCancel={() => setPublishModalVisible(false)}
+        onOk={handlePublish}
+        confirmLoading={publishing}
+        okText="发布"
+        width={480}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div>
+            <div style={{ marginBottom: 4, fontWeight: 500 }}>模型名称</div>
+            <div style={{ color: '#999' }}>{publishingModel?.name}</div>
+          </div>
+          <div>
+            <div style={{ marginBottom: 4, fontWeight: 500 }}>描述（可选）</div>
+            <Input.TextArea
+              rows={3}
+              value={publishDescription}
+              onChange={(e) => setPublishDescription(e.target.value)}
+              placeholder="为你的模型添加描述..."
+            />
+          </div>
+          <div>
+            <div style={{ marginBottom: 8, fontWeight: 500 }}>可见性</div>
+            <Radio.Group
+              value={publishVisibility}
+              onChange={(e) => setPublishVisibility(e.target.value)}
+              optionType="button"
+              buttonStyle="solid"
+            >
+              <Radio.Button value="public">
+                <Space>
+                  <GlobalOutlined />
+                  公开
+                </Space>
+              </Radio.Button>
+              <Radio.Button value="link">
+                <Space>
+                  <LinkOutlined />
+                  链接可见
+                </Space>
+              </Radio.Button>
+              <Radio.Button value="private">
+                <Space>
+                  <LockOutlined />
+                  私密
+                </Space>
+              </Radio.Button>
+            </Radio.Group>
+            <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+              {publishVisibility === 'public' && '所有人都可以在社区广场看到你的模型'}
+              {publishVisibility === 'link' && '模型不会出现在广场列表，但通过链接可以访问'}
+              {publishVisibility === 'private' && '仅自己可见，适合暂存或测试'}
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

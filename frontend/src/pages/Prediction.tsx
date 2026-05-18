@@ -15,6 +15,7 @@ import {
   Spin,
   Table,
   Collapse,
+  Tooltip,
 } from 'antd'
 import {
   ThunderboltOutlined,
@@ -23,11 +24,13 @@ import {
   MinusOutlined,
   RobotOutlined,
   DeleteOutlined,
+  StockOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons'
-import { predictionApi, trainingApi, modelApi } from '@/services/api'
+import { predictionApi, trainingApi, modelApi, dataApi } from '@/services/api'
 import { TrainingTask, UserModel } from '@/types'
 import MascotBull from '@/components/MascotBull'
-import { PredictionResult, PredictionAnimation, deriveConfidence, labelToDirection } from '@/components/PredictionFun'
+import { PredictionResult, PredictionAnimation, ConfidenceBar, deriveConfidence, labelToDirection } from '@/components/PredictionFun'
 
 interface PredictionRecord {
   task_id: number
@@ -35,10 +38,29 @@ interface PredictionRecord {
   predict_date: string
   prediction: number
   prediction_label: string
+  confidence?: number | null
+  predicted_price?: number | null
+  predicted_change_pct?: number | null
+  price_range_low?: number | null
+  price_range_high?: number | null
   latest_data?: { date: string; close: number; volume?: number }
   model_name: string
   model_type: string
   timestamp: number
+}
+
+interface RealtimeQuote {
+  code: string
+  name: string
+  price: number
+  open: number
+  high: number
+  low: number
+  pre_close: number
+  change_pct: number
+  volume: number
+  amount: number
+  time: string
 }
 
 const Prediction: React.FC = () => {
@@ -58,6 +80,8 @@ const Prediction: React.FC = () => {
   const [batchPredicting, setBatchPredicting] = useState(false)
 
   const [historyRecords, setHistoryRecords] = useState<PredictionRecord[]>([])
+  const [realtimeQuote, setRealtimeQuote] = useState<RealtimeQuote | null>(null)
+  const [loadingQuote, setLoadingQuote] = useState(false)
 
   useEffect(() => {
     fetchCompletedTasks()
@@ -114,6 +138,11 @@ const Prediction: React.FC = () => {
       predict_date: result.predict_date,
       prediction: result.prediction,
       prediction_label: result.prediction_label,
+      confidence: result.confidence ?? null,
+      predicted_price: result.predicted_price ?? null,
+      predicted_change_pct: result.predicted_change_pct ?? null,
+      price_range_low: result.price_range_low ?? null,
+      price_range_high: result.price_range_high ?? null,
       latest_data: result.latest_data,
       model_name: model ? model.name : `模型#${task?.model_id}`,
       model_type: model?.model_type || '',
@@ -134,6 +163,7 @@ const Prediction: React.FC = () => {
         stock_code: selectedStock,
       })
       addRecord(data, selectedTaskId)
+      fetchRealtimeQuote(selectedStock)
     } catch (error: any) {
       const detail = error?.response?.data?.detail
       if (typeof detail === 'string') {
@@ -143,6 +173,18 @@ const Prediction: React.FC = () => {
       }
     } finally {
       setPredicting(false)
+    }
+  }
+
+  const fetchRealtimeQuote = async (code: string) => {
+    setLoadingQuote(true)
+    try {
+      const data: any = await dataApi.getRealtimeQuote(code)
+      setRealtimeQuote(data)
+    } catch {
+      setRealtimeQuote(null)
+    } finally {
+      setLoadingQuote(false)
     }
   }
 
@@ -365,8 +407,11 @@ const Prediction: React.FC = () => {
       {/* 最新预测结果 */}
       {latestResult && (() => {
         const direction = labelToDirection(latestResult.prediction_label)
-        const confidence = deriveConfidence(latestResult.prediction)
+        const confidence = latestResult.confidence ?? deriveConfidence(latestResult.prediction)
         const stock = predictableStocks.find(s => s.code === latestResult.stock_code)
+        const changePct = latestResult.predicted_change_pct
+        const isUp = changePct !== null && changePct !== undefined && changePct > 0
+        const isDown = changePct !== null && changePct !== undefined && changePct < 0
         return (
           <Card title="最新预测结果" style={{ marginBottom: 24 }}>
             <Row gutter={[16, 16]}>
@@ -382,6 +427,10 @@ const Prediction: React.FC = () => {
                     confidence={confidence}
                     stockName={stock?.name}
                     stockCode={latestResult.stock_code}
+                    predictedPrice={latestResult.predicted_price}
+                    predictedChangePct={latestResult.predicted_change_pct}
+                    priceRangeLow={latestResult.price_range_low}
+                    priceRangeHigh={latestResult.price_range_high}
                   />
                 </Card>
               </Col>
@@ -396,7 +445,30 @@ const Prediction: React.FC = () => {
                       />
                     </Card>
                   </Col>
-                  <Col span={24}>
+                  <Col span={12}>
+                    <Card>
+                      <Statistic
+                        title="预测目标价格"
+                        value={latestResult.predicted_price ?? latestResult.latest_data?.close ?? 0}
+                        prefix="¥"
+                        precision={2}
+                        valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : undefined}
+                      />
+                    </Card>
+                  </Col>
+                  <Col span={12}>
+                    <Card>
+                      <Statistic
+                        title="预测涨跌幅"
+                        value={changePct ?? 0}
+                        precision={2}
+                        suffix="%"
+                        prefix={isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
+                        valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col span={12}>
                     <Card>
                       <Statistic
                         title="最新收盘价"
@@ -409,9 +481,71 @@ const Prediction: React.FC = () => {
                       </div>
                     </Card>
                   </Col>
+                  <Col span={12}>
+                    <Card>
+                      <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>置信度</div>
+                      <ConfidenceBar confidence={confidence} />
+                      {latestResult.price_range_low != null && latestResult.price_range_high != null && (
+                        <div style={{ marginTop: 12, fontSize: 13, color: '#888' }}>
+                          价格区间: ¥{latestResult.price_range_low.toFixed(2)} ~ ¥{latestResult.price_range_high.toFixed(2)}
+                        </div>
+                      )}
+                    </Card>
+                  </Col>
                 </Row>
               </Col>
             </Row>
+
+            {/* 实时行情 */}
+            {realtimeQuote && (
+              <Card
+                title={
+                  <Space>
+                    <StockOutlined />
+                    <span>实时行情 - {realtimeQuote.name}({realtimeQuote.code})</span>
+                    <Tooltip title="刷新行情">
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<ReloadOutlined spin={loadingQuote} />}
+                        onClick={() => fetchRealtimeQuote(latestResult.stock_code)}
+                      />
+                    </Tooltip>
+                  </Space>
+                }
+                style={{ marginTop: 16 }}
+                size="small"
+              >
+                <Row gutter={[16, 12]}>
+                  <Col span={4}>
+                    <Statistic
+                      title="当前价"
+                      value={realtimeQuote.price}
+                      precision={2}
+                      prefix="¥"
+                      valueStyle={realtimeQuote.change_pct > 0 ? { color: '#f5222d' } : realtimeQuote.change_pct < 0 ? { color: '#52c41a' } : undefined}
+                    />
+                  </Col>
+                  <Col span={4}>
+                    <Statistic
+                      title="涨跌幅"
+                      value={realtimeQuote.change_pct}
+                      precision={2}
+                      suffix="%"
+                      valueStyle={realtimeQuote.change_pct > 0 ? { color: '#f5222d' } : realtimeQuote.change_pct < 0 ? { color: '#52c41a' } : undefined}
+                      prefix={realtimeQuote.change_pct > 0 ? <ArrowUpOutlined /> : realtimeQuote.change_pct < 0 ? <ArrowDownOutlined /> : undefined}
+                    />
+                  </Col>
+                  <Col span={4}><Statistic title="开盘" value={realtimeQuote.open} precision={2} prefix="¥" /></Col>
+                  <Col span={4}><Statistic title="最高" value={realtimeQuote.high} precision={2} prefix="¥" /></Col>
+                  <Col span={4}><Statistic title="最低" value={realtimeQuote.low} precision={2} prefix="¥" /></Col>
+                  <Col span={4}><Statistic title="昨收" value={realtimeQuote.pre_close} precision={2} prefix="¥" /></Col>
+                </Row>
+                <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+                  行情时间: {realtimeQuote.time || '-'}
+                </div>
+              </Card>
+            )}
 
             <Alert
               style={{ marginTop: 16 }}

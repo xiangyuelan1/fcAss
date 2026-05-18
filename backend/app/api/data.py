@@ -19,6 +19,7 @@ from app.auth import get_current_active_user
 from app.models.user import User as UserModel
 from app.models.user_prefs import UserStockPrefs
 from app.models.stock import Stock, StockPrice
+from app.utils.data_fetcher import DataFetcher
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -432,6 +433,31 @@ async def delete_stock(
     db.delete(stock)
     db.commit()
     return {"success": True, "message": f"股票 {code} 及其所有数据已删除"}
+
+
+@router.get("/stocks/realtime")
+async def get_realtime_quotes(
+    codes: str = Query(..., description="股票代码列表，逗号分隔，如 600519,000001"),
+):
+    """批量获取实时行情（新浪财经数据源）"""
+    code_list = [c.strip() for c in codes.split(',') if c.strip()]
+    if not code_list:
+        raise HTTPException(status_code=400, detail="请提供至少一个股票代码")
+
+    if len(code_list) > 50:
+        raise HTTPException(status_code=400, detail="单次最多查询50只股票")
+
+    quotes = DataFetcher.get_realtime_quote(code_list)
+    return {"quotes": list(quotes.values())}
+
+
+@router.get("/stocks/{code}/realtime")
+async def get_realtime_quote(code: str):
+    """获取单只股票实时行情"""
+    quotes = DataFetcher.get_realtime_quote([code])
+    if code not in quotes:
+        raise HTTPException(status_code=404, detail=f"股票 {code} 实时行情获取失败，可能不在交易时间或代码无效")
+    return quotes[code]
 
 
 @router.get("/stale-check")

@@ -1,13 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta
 from app.core.database import get_db
-from app.auth import get_current_active_user, require_admin
+from app.auth import get_current_active_user, require_admin, optional_get_current_active_user
 from app.models.user import User as UserModel
 from app.models.community import CommunityModel, CommunitySignal, CommunityLike, UserPoints, PointTransaction
 from app.models.user_model import UserModel as UserORMModel
 from app.models.training import TrainingTask
+from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
+from app.services.feature_service import FeatureService
+from app.services.data_service import DataService
+from app.services.backtest_service import BacktestService
+from app.api.prediction import _do_predict, _prediction_to_label
 from sqlalchemy import func, desc
 
 router = APIRouter()
@@ -17,6 +23,19 @@ class PublishModelRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_id: int
     description: Optional[str] = None
+    visibility: str = "public"
+
+
+class CommunityPredictRequest(BaseModel):
+    stock_code: str
+    days: int = 1
+
+
+class CommunityBacktestRequest(BaseModel):
+    stock_code: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    initial_capital: float = 100000
 
 
 class PublishSignalRequest(BaseModel):
@@ -96,6 +115,7 @@ async def publish_model(
         stock_codes=user_model.stock_codes or [],
         train_date_range=user_model.train_date_range,
         metrics=latest_task.metrics if latest_task else None,
+        visibility=request.visibility,
     )
     db.add(community_model)
     db.flush()
@@ -132,6 +152,7 @@ async def get_community_models(
     user_id: Optional[int] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    current_user: Optional[UserModel] = Depends(optional_get_current_active_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(CommunityModel).filter(CommunityModel.is_active == True)
@@ -142,6 +163,15 @@ async def get_community_models(
         query = query.filter(CommunityModel.model_type == model_type)
     if user_id:
         query = query.filter(CommunityModel.user_id == user_id)
+
+    # visibility 过滤：public 所有人可见，private 仅作者可见，link 不在列表中显示
+    if current_user:
+        query = query.filter(
+            (CommunityModel.visibility == "public") |
+            ((CommunityModel.visibility == "private") & (CommunityModel.user_id == current_user.id))
+        )
+    else:
+        query = query.filter(CommunityModel.visibility == "public")
 
     if sort_by == "likes":
         query = query.order_by(desc(CommunityModel.likes_count))
@@ -174,11 +204,20 @@ async def get_community_models(
 @router.get("/models/{model_id}")
 async def get_community_model_detail(
     model_id: int,
+    current_user: Optional[UserModel] = Depends(optional_get_current_active_user),
     db: Session = Depends(get_db),
 ):
     community_model = db.query(CommunityModel).filter(CommunityModel.id == model_id).first()
     if not community_model:
         raise HTTPException(status_code=404, detail="社区模型不存在")
+
+    # visibility 访问控制
+    vis = community_model.visibility or "public"
+    if vis == "private":
+        if not current_user or community_model.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="社区模型不存在")
+    # link: 通过 ID 直接访问时可见（无需额外限制）
+    # public: 所有人可见
 
     d = community_model.to_dict()
     author = db.query(UserModel).filter(UserModel.id == community_model.user_id).first()
@@ -402,3 +441,161 @@ async def get_my_signals(
         "page_size": page_size,
         "items": [s.to_dict() for s in items],
     }
+
+
+def _resolve_community_model_task(
+    model_id: int, current_user: UserModel, db: Session
+):
+    """查找社区模型及其最新已完成训练任务，供预测/回测共用"""
+    community_model = db.query(CommunityModel).filter(
+        CommunityModel.id == model_id,
+        CommunityModel.is_active == True,
+    ).first()
+    if not community_model:
+        raise HTTPException(status_code=404, detail="社区模型不存在或已下架")
+
+    # visibility 访问控制
+    vis = community_model.visibility or "public"
+    if vis == "private" and community_model.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="社区模型不存在")
+
+    # 通过 source_model_id 找到原始 UserModel 的最新已完成训练任务
+    latest_task = db.query(TrainingTask).filter(
+        TrainingTask.model_id == community_model.source_model_id,
+        TrainingTask.status == 'completed',
+    ).order_by(desc(TrainingTask.created_at)).first()
+
+    if not latest_task:
+        raise HTTPException(status_code=400, detail="该社区模型尚无已完成的训练任务，无法执行操作")
+
+    return community_model, latest_task
+
+
+@router.post("/models/{model_id}/predict")
+async def predict_with_community_model(
+    model_id: int,
+    request: CommunityPredictRequest,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """使用社区模型进行预测（不需要克隆，直接使用训练好的权重）"""
+    community_model, latest_task = _resolve_community_model_task(model_id, current_user, db)
+
+    # 加载模型检查点
+    try:
+        model, metrics, input_size = ModelCheckpoint.load_checkpoint(latest_task.id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="模型检查点不存在，原作者可能已删除训练文件")
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    user_model = latest_task.user_model
+    feature_service = FeatureService(db)
+    data_service = DataService(db)
+
+    # 确保股票数据存在
+    stock_info = data_service.get_stock_by_code(request.stock_code)
+    if not stock_info:
+        try:
+            result = data_service.fetch_stock_data(request.stock_code)
+            if result['price_count'] == 0:
+                raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 数据获取失败")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 数据获取失败: {str(e)}")
+
+    # 计算特征
+    df = feature_service.calculate_features(
+        stock_code=request.stock_code,
+        indicators=community_model.features,
+        indicator_params=community_model.feature_config or {},
+        limit=5000,
+    )
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 无可用数据")
+
+    exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
+                    'change_pct', 'change_amount', 'adj_close'}
+    feature_cols = [col for col in df.columns if col not in exclude_cols]
+    if not feature_cols:
+        raise HTTPException(status_code=400, detail="无可用特征列")
+    if len(feature_cols) != input_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"特征列数({len(feature_cols)})与模型期望({input_size})不匹配",
+        )
+
+    # 标准化
+    df_features = df[feature_cols].copy()
+    df_features = (df_features - df_features.mean()) / df_features.std()
+
+    # 执行预测
+    try:
+        prediction = _do_predict(model, community_model.model_type, community_model.model_config, df_features, input_size)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"预测执行失败: {str(e)}")
+
+    prediction_label = _prediction_to_label(prediction, community_model.target)
+
+    # 获取最新行情
+    latest_row = df.iloc[-1]
+    latest_data = {
+        'date': latest_row.name.strftime('%Y-%m-%d') if hasattr(latest_row.name, 'strftime') else str(latest_row.name),
+        'close': float(latest_row['close']) if latest_row['close'] is not None else None,
+        'volume': int(latest_row['volume']) if latest_row['volume'] is not None else None,
+    }
+
+    predict_date = (datetime.now() + timedelta(days=request.days)).strftime('%Y-%m-%d')
+
+    return {
+        "task_id": latest_task.id,
+        "community_model_id": model_id,
+        "stock_code": request.stock_code,
+        "predict_date": predict_date,
+        "prediction": round(float(prediction), 6),
+        "prediction_label": prediction_label,
+        "latest_data": latest_data,
+    }
+
+
+@router.post("/models/{model_id}/backtest")
+async def backtest_community_model(
+    model_id: int,
+    request: CommunityBacktestRequest,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """使用社区模型进行回测"""
+    community_model, latest_task = _resolve_community_model_task(model_id, current_user, db)
+
+    # 默认回测区间：训练结束日期至今
+    start_date = request.start_date
+    end_date = request.end_date
+    if not start_date:
+        train_range = community_model.train_date_range or {}
+        start_date = train_range.get("end", "2024-01-01")
+    if not end_date:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+
+    # 创建回测任务（关联到原始训练任务）
+    service = BacktestService(db)
+    backtest = service.create_backtest(
+        task_id=latest_task.id,
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=request.initial_capital,
+    )
+
+    # 使用社区模型的配置和指定股票执行回测
+    override_codes = [request.stock_code]
+    try:
+        service.run_backtest(backtest.id, override_codes)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"回测执行失败: {str(e)}")
+
+    # 重新获取结果
+    backtest = service.get_result(backtest.id)
+    result = backtest.to_dict() if backtest else {}
+    result["community_model_id"] = model_id
+    return result

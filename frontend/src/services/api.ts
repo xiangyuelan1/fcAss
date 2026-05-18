@@ -88,6 +88,12 @@ export const dataApi = {
 
   syncStockPool: () =>
     api.post('/data/stocks/sync-pool'),
+
+  getRealtimeQuotes: (codes: string[]) =>
+    api.get('/data/stocks/realtime', { params: { codes: codes.join(',') } }),
+
+  getRealtimeQuote: (code: string) =>
+    api.get(`/data/stocks/${code}/realtime`),
 };
 
 // 特征工程API
@@ -394,6 +400,10 @@ export const communityApi = {
   unpublishModel: (id: number) => api.post(`/community/models/${id}/unpublish`),
   likeModel: (id: number) => api.post(`/community/models/${id}/like`),
   cloneModel: (id: number) => api.post(`/community/models/${id}/clone`),
+  predictWithModel: (modelId: number, data: { stock_code: string; days?: number }) =>
+    api.post(`/community/models/${modelId}/predict`, data),
+  backtestModel: (modelId: number, data: { stock_code: string; start_date?: string; end_date?: string; initial_capital?: number }) =>
+    api.post(`/community/models/${modelId}/backtest`, data),
   getSignals: (params?: any) => api.get('/community/signals', { params }),
   publishSignal: (data: any) => api.post('/community/signals/publish', data),
   likeSignal: (id: number) => api.post(`/community/signals/${id}/like`),

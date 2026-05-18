@@ -390,6 +390,101 @@ class DataFetcher:
             'industry': None,
         }
 
+    @staticmethod
+    def get_realtime_quote(codes: list[str]) -> dict[str, dict]:
+        """获取实时行情（新浪财经API）
+
+        Args:
+            codes: 纯数字股票代码列表，如 ['600519', '000001']
+
+        Returns:
+            dict: {code: {name, price, open, high, low, pre_close, change_pct, volume, amount, time}}
+        """
+        if not codes:
+            return {}
+
+        sina_codes = []
+        for code in codes:
+            code = code.strip().replace('.', '')
+            if code.startswith('6'):
+                sina_codes.append(f'sh{code}')
+            elif code.startswith('0') or code.startswith('3'):
+                sina_codes.append(f'sz{code}')
+            elif code.startswith('8') or code.startswith('4'):
+                sina_codes.append(f'bj{code}')
+            else:
+                sina_codes.append(f'sh{code}')
+
+        url = f"https://hq.sinajs.cn/list={','.join(sina_codes)}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://finance.sina.com.cn/',
+        }
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.encoding = 'gbk'
+            text = resp.text
+        except Exception as e:
+            logger.warning(f"新浪实时行情请求失败: {e}")
+            return {}
+
+        result = {}
+        for line in text.strip().split('\n'):
+            if '=' not in line:
+                continue
+            var_part, data_part = line.split('=', 1)
+            # var_part: var hq_str_sh600519
+            sina_code = var_part.strip().split('_')[-1]
+            # 从 sina_code 提取纯数字代码
+            pure_code = sina_code[2:] if len(sina_code) > 2 else sina_code
+
+            # 去掉引号和分号
+            data_str = data_part.strip().strip('";').strip('"')
+            if not data_str:
+                continue
+
+            fields = data_str.split(',')
+            # 新浪行情字段: 0名称,1开盘,2昨收,3当前,4最高,5最低,6买一,7卖一,8成交量(股),9成交额
+            # 10-29 买卖五档, 30日期, 31时间
+            if len(fields) < 32:
+                continue
+
+            try:
+                name = fields[0]
+                open_price = float(fields[1]) if fields[1] else 0
+                pre_close = float(fields[2]) if fields[2] else 0
+                current_price = float(fields[3]) if fields[3] else 0
+                high = float(fields[4]) if fields[4] else 0
+                low = float(fields[5]) if fields[5] else 0
+                volume = int(float(fields[8])) if fields[8] else 0
+                amount = float(fields[9]) if fields[9] else 0
+                date_str = fields[30] if len(fields) > 30 else ''
+                time_str = fields[31] if len(fields) > 31 else ''
+
+                change_pct = 0.0
+                if pre_close > 0:
+                    change_pct = round((current_price - pre_close) / pre_close * 100, 2)
+
+                result[pure_code] = {
+                    'code': pure_code,
+                    'name': name,
+                    'price': current_price,
+                    'open': open_price,
+                    'high': high,
+                    'low': low,
+                    'pre_close': pre_close,
+                    'change_pct': change_pct,
+                    'volume': volume,
+                    'amount': amount,
+                    'time': f"{date_str} {time_str}".strip(),
+                }
+            except (ValueError, IndexError) as e:
+                logger.warning(f"解析新浪行情数据失败 {sina_code}: {e}")
+                continue
+
+        return result
+
 
 def _normalize_date(date_str: str) -> str:
     """统一日期格式为 YYYY-MM-DD"""

@@ -41,6 +41,10 @@ class PredictResponse(BaseModel):
     prediction: float
     prediction_label: str
     confidence: Optional[float] = None
+    predicted_price: Optional[float] = None
+    predicted_change_pct: Optional[float] = None
+    price_range_low: Optional[float] = None
+    price_range_high: Optional[float] = None
     latest_data: Optional[Dict[str, Any]] = None
 
 
@@ -130,11 +134,32 @@ async def predict(
 
     # 获取最新行情数据
     latest_row = df.iloc[-1]
+    latest_close = float(latest_row['close']) if latest_row['close'] is not None else None
     latest_data = {
         'date': latest_row.name.strftime('%Y-%m-%d') if hasattr(latest_row.name, 'strftime') else str(latest_row.name),
-        'close': float(latest_row['close']) if latest_row['close'] is not None else None,
+        'close': latest_close,
         'volume': int(latest_row['volume']) if latest_row['volume'] is not None else None,
     }
+
+    # 计算置信度：分类模型用预测概率，回归模型用 |prediction| 映射
+    confidence = _compute_confidence(prediction, target)
+
+    # 根据 target 类型推导预测涨跌幅
+    predicted_change_pct = _compute_predicted_change_pct(prediction, target)
+
+    # 计算预测目标价格
+    predicted_price = None
+    if latest_close and predicted_change_pct is not None:
+        predicted_price = round(latest_close * (1 + predicted_change_pct / 100), 2)
+
+    # 基于置信度生成价格区间（置信度越高区间越窄）
+    price_range_low = None
+    price_range_high = None
+    if latest_close and predicted_change_pct is not None:
+        # 置信度 1.0 → 波动 ±0.5%，置信度 0.5 → 波动 ±3%，置信度 0 → 波动 ±5%
+        spread_pct = 5.0 * (1 - confidence) if confidence is not None else 5.0
+        price_range_low = round(latest_close * (1 + predicted_change_pct / 100 - spread_pct / 100), 2)
+        price_range_high = round(latest_close * (1 + predicted_change_pct / 100 + spread_pct / 100), 2)
 
     predict_date = (datetime.now() + timedelta(days=request.days)).strftime('%Y-%m-%d')
 
@@ -144,6 +169,11 @@ async def predict(
         predict_date=predict_date,
         prediction=round(float(prediction), 6),
         prediction_label=prediction_label,
+        confidence=round(confidence, 4) if confidence is not None else None,
+        predicted_price=predicted_price,
+        predicted_change_pct=round(predicted_change_pct, 4) if predicted_change_pct is not None else None,
+        price_range_low=price_range_low,
+        price_range_high=price_range_high,
         latest_data=latest_data,
     )
 
@@ -285,3 +315,36 @@ def _prediction_to_label(prediction: float, target: str) -> str:
             return '震荡'
     else:
         return '看涨' if prediction > 0 else '看跌'
+
+
+def _compute_confidence(prediction: float, target: str) -> float:
+    """根据预测值和目标类型计算置信度
+
+    分类模型（next_day_direction）：prediction 本身是概率值，直接用距离 0.5 的程度
+    回归模型（next_day_return/price_change_5d）：用 |prediction| 映射到 0-1
+    """
+    if target == 'next_day_direction':
+        # 分类模型：prediction 是概率，距 0.5 越远置信度越高
+        return abs(prediction - 0.5) * 2
+    else:
+        # 回归模型：|prediction| 越大置信度越高，典型收益率 ±0.05
+        abs_val = abs(prediction)
+        return min(abs_val / 0.05, 1.0)
+
+
+def _compute_predicted_change_pct(prediction: float, target: str) -> Optional[float]:
+    """根据 target 类型将原始预测值转换为涨跌幅百分比
+
+    next_day_direction: 概率值 → 涨跌幅（0.5=0%, 1.0=+5%, 0.0=-5%）
+    next_day_return: 原始收益率 → 百分比
+    price_change_5d: 5日变化率 → 百分比
+    """
+    if target == 'next_day_direction':
+        # 概率映射：0.5 → 0%, 1.0 → +5%, 0.0 → -5%
+        return (prediction - 0.5) * 10
+    elif target == 'next_day_return':
+        return prediction * 100
+    elif target == 'price_change_5d':
+        return prediction * 100
+    else:
+        return prediction * 100

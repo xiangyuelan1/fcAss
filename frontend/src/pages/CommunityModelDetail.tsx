@@ -12,6 +12,11 @@ import {
   Spin,
   message,
   Avatar,
+  Modal,
+  Input,
+  InputNumber,
+  DatePicker,
+  Alert,
 } from 'antd'
 import {
   HeartOutlined,
@@ -22,6 +27,10 @@ import {
   RiseOutlined,
   FallOutlined,
   GlobalOutlined,
+  LineChartOutlined,
+  FundOutlined,
+  LinkOutlined,
+  LockOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { communityApi } from '@/services/api'
@@ -36,6 +45,12 @@ const MODEL_TYPE_COLORS: Record<string, string> = {
   mlp: 'purple',
 }
 
+const VISIBILITY_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
+  public: { label: '公开', color: 'green', icon: <GlobalOutlined /> },
+  link: { label: '链接可见', color: 'blue', icon: <LinkOutlined /> },
+  private: { label: '私密', color: 'red', icon: <LockOutlined /> },
+}
+
 const CommunityModelDetail: React.FC = () => {
   const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
@@ -44,6 +59,22 @@ const CommunityModelDetail: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [liking, setLiking] = useState(false)
   const [cloning, setCloning] = useState(false)
+
+  // 直接预测弹窗状态
+  const [predictModalVisible, setPredictModalVisible] = useState(false)
+  const [predictStockCode, setPredictStockCode] = useState('')
+  const [predictDays, setPredictDays] = useState(1)
+  const [predicting, setPredicting] = useState(false)
+  const [predictResult, setPredictResult] = useState<any>(null)
+
+  // 回测弹窗状态
+  const [backtestModalVisible, setBacktestModalVisible] = useState(false)
+  const [backtestStockCode, setBacktestStockCode] = useState('')
+  const [backtestStartDate, setBacktestStartDate] = useState<string | undefined>(undefined)
+  const [backtestEndDate, setBacktestEndDate] = useState<string | undefined>(undefined)
+  const [backtestCapital, setBacktestCapital] = useState(100000)
+  const [backtesting, setBacktesting] = useState(false)
+  const [backtestResult, setBacktestResult] = useState<any>(null)
 
   useEffect(() => {
     if (id) {
@@ -104,6 +135,68 @@ const CommunityModelDetail: React.FC = () => {
     navigate('/community/pk')
   }
 
+  const handlePredict = async () => {
+    if (!model || !predictStockCode) {
+      message.warning('请输入股票代码')
+      return
+    }
+    setPredicting(true)
+    setPredictResult(null)
+    try {
+      const data = await communityApi.predictWithModel(model.id, {
+        stock_code: predictStockCode,
+        days: predictDays,
+      })
+      setPredictResult(data)
+      message.success('预测完成')
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail || error?.message
+      message.error(detail || '预测失败')
+    } finally {
+      setPredicting(false)
+    }
+  }
+
+  const handleBacktest = async () => {
+    if (!model || !backtestStockCode) {
+      message.warning('请输入股票代码')
+      return
+    }
+    setBacktesting(true)
+    setBacktestResult(null)
+    try {
+      const data = await communityApi.backtestModel(model.id, {
+        stock_code: backtestStockCode,
+        start_date: backtestStartDate,
+        end_date: backtestEndDate,
+        initial_capital: backtestCapital,
+      })
+      setBacktestResult(data)
+      message.success('回测完成')
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail || error?.message
+      message.error(detail || '回测失败')
+    } finally {
+      setBacktesting(false)
+    }
+  }
+
+  const openPredictModal = () => {
+    setPredictStockCode('')
+    setPredictDays(1)
+    setPredictResult(null)
+    setPredictModalVisible(true)
+  }
+
+  const openBacktestModal = () => {
+    setBacktestStockCode('')
+    setBacktestStartDate(undefined)
+    setBacktestEndDate(undefined)
+    setBacktestCapital(100000)
+    setBacktestResult(null)
+    setBacktestModalVisible(true)
+  }
+
   const getDirectionIcon = (direction: string) => {
     if (direction === 'up') return <RiseOutlined style={{ color: '#f5222d' }} />
     if (direction === 'down') return <FallOutlined style={{ color: '#52c41a' }} />
@@ -114,6 +207,16 @@ const CommunityModelDetail: React.FC = () => {
     if (direction === 'up') return '看涨'
     if (direction === 'down') return '看跌'
     return '震荡'
+  }
+
+  const getVisibilityTag = (visibility?: string) => {
+    const vis = visibility || 'public'
+    const config = VISIBILITY_CONFIG[vis] || VISIBILITY_CONFIG.public
+    return (
+      <Tag color={config.color} icon={config.icon}>
+        {config.label}
+      </Tag>
+    )
   }
 
   if (loading) {
@@ -152,6 +255,7 @@ const CommunityModelDetail: React.FC = () => {
               <Tag color={MODEL_TYPE_COLORS[model.model_type] || 'default'}>
                 {model.model_type.toUpperCase()}
               </Tag>
+              {getVisibilityTag(model.visibility)}
             </Space>
             <div style={{ marginTop: 8, color: '#999' }}>
               {model.description || '暂无描述'}
@@ -169,7 +273,19 @@ const CommunityModelDetail: React.FC = () => {
             </div>
           </Col>
           <Col>
-            <Space>
+            <Space wrap>
+              <Button
+                icon={<LineChartOutlined />}
+                onClick={openPredictModal}
+              >
+                直接预测
+              </Button>
+              <Button
+                icon={<FundOutlined />}
+                onClick={openBacktestModal}
+              >
+                回测
+              </Button>
               <Button
                 icon={model.is_liked ? <HeartFilled style={{ color: '#eb2f96' }} /> : <HeartOutlined />}
                 onClick={handleLike}
@@ -297,6 +413,165 @@ const CommunityModelDetail: React.FC = () => {
           locale={{ emptyText: '暂无预测信号' }}
         />
       </Card>
+
+      {/* 直接预测弹窗 */}
+      <Modal
+        title="直接预测"
+        open={predictModalVisible}
+        onCancel={() => setPredictModalVisible(false)}
+        onOk={handlePredict}
+        confirmLoading={predicting}
+        okText="执行预测"
+        width={520}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div>
+            <div style={{ marginBottom: 4, fontWeight: 500 }}>股票代码</div>
+            <Input
+              placeholder="输入股票代码，如 000001"
+              value={predictStockCode}
+              onChange={(e) => setPredictStockCode(e.target.value)}
+            />
+          </div>
+          <div>
+            <div style={{ marginBottom: 4, fontWeight: 500 }}>预测天数</div>
+            <InputNumber
+              min={1}
+              max={30}
+              value={predictDays}
+              onChange={(v) => setPredictDays(v || 1)}
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          {predictResult && (
+            <Card size="small" title="预测结果" style={{ marginTop: 8 }}>
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label="股票代码">{predictResult.stock_code}</Descriptions.Item>
+                <Descriptions.Item label="预测日期">{predictResult.predict_date}</Descriptions.Item>
+                <Descriptions.Item label="预测值">{predictResult.prediction}</Descriptions.Item>
+                <Descriptions.Item label="预测方向">
+                  <Tag color={predictResult.prediction_label === '看涨' ? 'red' : predictResult.prediction_label === '看跌' ? 'green' : 'default'}>
+                    {predictResult.prediction_label}
+                  </Tag>
+                </Descriptions.Item>
+                {predictResult.latest_data && (
+                  <>
+                    <Descriptions.Item label="最新收盘价">
+                      ¥{predictResult.latest_data.close?.toFixed(2)}
+                    </Descriptions.Item>
+                    <Descriptions.Item label="最新日期">
+                      {predictResult.latest_data.date}
+                    </Descriptions.Item>
+                  </>
+                )}
+              </Descriptions>
+            </Card>
+          )}
+        </div>
+      </Modal>
+
+      {/* 回测弹窗 */}
+      <Modal
+        title="社区模型回测"
+        open={backtestModalVisible}
+        onCancel={() => setBacktestModalVisible(false)}
+        onOk={handleBacktest}
+        confirmLoading={backtesting}
+        okText="执行回测"
+        width={600}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Alert
+            message="回测将使用社区模型的训练权重对指定股票进行历史模拟交易"
+            type="info"
+            showIcon
+          />
+          <div>
+            <div style={{ marginBottom: 4, fontWeight: 500 }}>股票代码</div>
+            <Input
+              placeholder="输入股票代码，如 000001"
+              value={backtestStockCode}
+              onChange={(e) => setBacktestStockCode(e.target.value)}
+            />
+          </div>
+          <Row gutter={16}>
+            <Col span={12}>
+              <div style={{ marginBottom: 4, fontWeight: 500 }}>开始日期（可选）</div>
+              <DatePicker
+                style={{ width: '100%' }}
+                onChange={(_, ds) => setBacktestStartDate(ds as string || undefined)}
+                placeholder="默认为训练结束日"
+              />
+            </Col>
+            <Col span={12}>
+              <div style={{ marginBottom: 4, fontWeight: 500 }}>结束日期（可选）</div>
+              <DatePicker
+                style={{ width: '100%' }}
+                onChange={(_, ds) => setBacktestEndDate(ds as string || undefined)}
+                placeholder="默认为今天"
+              />
+            </Col>
+          </Row>
+          <div>
+            <div style={{ marginBottom: 4, fontWeight: 500 }}>初始资金</div>
+            <InputNumber
+              min={10000}
+              max={10000000}
+              step={10000}
+              value={backtestCapital}
+              onChange={(v) => setBacktestCapital(v || 100000)}
+              style={{ width: '100%' }}
+              prefix="¥"
+            />
+          </div>
+
+          {backtestResult && (
+            <Card size="small" title="回测结果" style={{ marginTop: 8 }}>
+              <Row gutter={[16, 12]}>
+                <Col span={8}>
+                  <Statistic
+                    title="总收益率"
+                    value={((backtestResult.total_return || 0) * 100).toFixed(2)}
+                    suffix="%"
+                    valueStyle={{
+                      color: (backtestResult.total_return || 0) >= 0 ? '#f5222d' : '#52c41a',
+                    }}
+                  />
+                </Col>
+                <Col span={8}>
+                  <Statistic
+                    title="年化收益"
+                    value={((backtestResult.annual_return || 0) * 100).toFixed(2)}
+                    suffix="%"
+                  />
+                </Col>
+                <Col span={8}>
+                  <Statistic
+                    title="最大回撤"
+                    value={((backtestResult.max_drawdown || 0) * 100).toFixed(2)}
+                    suffix="%"
+                    valueStyle={{ color: '#f5222d' }}
+                  />
+                </Col>
+                <Col span={8}>
+                  <Statistic title="夏普比率" value={(backtestResult.sharpe_ratio || 0).toFixed(2)} />
+                </Col>
+                <Col span={8}>
+                  <Statistic title="交易次数" value={backtestResult.trades_count || 0} />
+                </Col>
+                <Col span={8}>
+                  <Statistic
+                    title="胜率"
+                    value={((backtestResult.win_rate || 0) * 100).toFixed(1)}
+                    suffix="%"
+                  />
+                </Col>
+              </Row>
+            </Card>
+          )}
+        </div>
+      </Modal>
     </div>
   )
 }

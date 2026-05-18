@@ -66,6 +66,7 @@ _MIGRATION_COLUMNS = {
         ("feature_config", "JSON"),
         ("target_config", "JSON"),
         ("train_date_range", "JSON"),
+        ("visibility", "VARCHAR(20) DEFAULT 'public'"),
     ],
     "payment_config": [
         ("register_fee", "DECIMAL(10,2) DEFAULT 1.00"),

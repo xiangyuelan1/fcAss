@@ -22,6 +22,7 @@ class CommunityModel(Base):
     train_date_range = Column(JSON)
     metrics = Column(JSON)
     is_active = Column(Boolean, default=True)
+    visibility = Column(String(20), default="public")
     likes_count = Column(Integer, default=0)
     clones_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)
@@ -47,6 +48,7 @@ class CommunityModel(Base):
             "train_date_range": self.train_date_range,
             "metrics": self.metrics,
             "is_active": self.is_active,
+            "visibility": self.visibility or "public",
             "likes_count": self.likes_count,
             "clones_count": self.clones_count,
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,

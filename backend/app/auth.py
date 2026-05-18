@@ -109,6 +109,22 @@ async def get_current_active_user(current_user: UserModel = Depends(get_current_
     return current_user
 
 
+async def optional_get_current_active_user(
+    db: Session = Depends(get_db),
+    token: Optional[str] = Depends(OAuth2PasswordBearer(tokenUrl="api/auth/token", auto_error=False)),
+) -> Optional[UserModel]:
+    """可选认证：有 token 时返回用户，无 token 时返回 None（用于公开接口）"""
+    if token is None:
+        return None
+    token_data = decode_token(token)
+    if token_data is None or token_data.username is None:
+        return None
+    user = db.query(UserModel).filter(UserModel.username == token_data.username).first()
+    if user is None or not user.is_active:
+        return None
+    return user
+
+
 async def require_admin(current_user: UserModel = Depends(get_current_active_user)):
     """要求管理员权限"""
     if not current_user.is_admin:

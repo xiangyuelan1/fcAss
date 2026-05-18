@@ -51,6 +51,20 @@ def _ensure_default_admin():
         db.close()
 
 
+def _sync_stock_pool_on_startup():
+    """启动时自动同步A股股票池（仅名称和代码，不获取价格）"""
+    db = SessionLocal()
+    try:
+        from app.services.data_service import DataService
+        service = DataService(db)
+        count = service.sync_stock_pool()
+        print(f"[OK] 股票池同步完成: 新增 {count} 只股票")
+    except Exception as e:
+        print(f"[WARN] 股票池同步失败: {e}，可手动同步")
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -60,6 +74,7 @@ async def lifespan(app: FastAPI):
     print("[OK] 数据库初始化完成")
     _migrate_db()
     _ensure_default_admin()
+    _sync_stock_pool_on_startup()
 
     yield
 

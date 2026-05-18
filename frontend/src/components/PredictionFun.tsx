@@ -9,6 +9,10 @@ export interface PredictionResultProps {
   confidence: number
   stockName?: string
   stockCode?: string
+  predictedPrice?: number | null
+  predictedChangePct?: number | null
+  priceRangeLow?: number | null
+  priceRangeHigh?: number | null
 }
 
 interface PredictionAnimationProps {
@@ -268,6 +272,10 @@ export const PredictionResult: React.FC<PredictionResultProps> = ({
   confidence,
   stockName,
   stockCode,
+  predictedPrice,
+  predictedChangePct,
+  priceRangeLow,
+  priceRangeHigh,
 }) => {
   useEffect(() => { injectKeyframes() }, [])
 
@@ -280,6 +288,10 @@ export const PredictionResult: React.FC<PredictionResultProps> = ({
       : direction === 'down'
       ? 'pfArrowBounceDown'
       : 'none'
+
+  const isUp = predictedChangePct != null && predictedChangePct > 0
+  const isDown = predictedChangePct != null && predictedChangePct < 0
+  const changeColor = isUp ? '#f5222d' : isDown ? '#52c41a' : '#faad14'
 
   return (
     <div
@@ -294,6 +306,27 @@ export const PredictionResult: React.FC<PredictionResultProps> = ({
         <div style={{ fontSize: 14, color: '#999', marginBottom: 12 }}>
           {stockCode && <span>{stockCode}</span>}
           {stockName && <span> · {stockName}</span>}
+        </div>
+      )}
+
+      {/* 预测目标价格（大字显示） */}
+      {predictedPrice != null && (
+        <div style={{ fontSize: 36, fontWeight: 800, color: changeColor, lineHeight: 1.2, marginBottom: 4 }}>
+          ¥{predictedPrice.toFixed(2)}
+        </div>
+      )}
+
+      {/* 预测涨跌幅（带颜色和箭头） */}
+      {predictedChangePct != null && (
+        <div style={{ fontSize: 18, fontWeight: 600, color: changeColor, marginBottom: 12 }}>
+          {isUp ? '↑' : isDown ? '↓' : '→'} {predictedChangePct > 0 ? '+' : ''}{predictedChangePct.toFixed(2)}%
+        </div>
+      )}
+
+      {/* 价格区间 */}
+      {priceRangeLow != null && priceRangeHigh != null && (
+        <div style={{ fontSize: 13, color: '#888', marginBottom: 12 }}>
+          价格区间: ¥{priceRangeLow.toFixed(2)} ~ ¥{priceRangeHigh.toFixed(2)}
         </div>
       )}
 

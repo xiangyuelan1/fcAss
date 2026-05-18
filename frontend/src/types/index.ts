@@ -244,6 +244,7 @@ export interface CommunityModel {
   likes_count: number;
   clones_count: number;
   is_active: boolean;
+  visibility?: 'public' | 'link' | 'private';
   author?: { id: number; username: string };
   is_liked?: boolean;
   created_at: string;
