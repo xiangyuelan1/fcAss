@@ -322,6 +322,8 @@ class TrainingService:
             self._log(task_id, f"特征指标: {', '.join(user_model.features or [])}")
             self._log(task_id, f"训练股票: {', '.join(user_model.stock_codes or [])}")
             self._log(task_id, f"预测目标: {user_model.target}")
+            if user_model.target == 'multi_feature_next_day':
+                self._log(task_id, "多维预测模式：训练主目标为收益率，波动率与量变率在预测阶段基于特征推导")
             
             # 准备数据
             training_progress[task_id] = {'stage': 'data_preparation', 'progress': 0}
@@ -435,8 +437,6 @@ class TrainingService:
             elif target == 'price_change_5d':
                 df['target'] = df['close'].shift(-5) / df['close'] - 1
             elif target == 'multi_feature_next_day':
-                # 多维目标：次日收益率 + 次日波动率 + 次日成交量变化率
-                # 训练时使用第一个维度（收益率）作为主目标，其余存储在target_config中
                 df['target'] = df['close'].shift(-1) / df['close'] - 1
             else:
                 df['target'] = df['close'].shift(-1) / df['close'] - 1

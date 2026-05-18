@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
+import random
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -19,12 +20,32 @@ from app.models.user import User as UserModel
 
 router = APIRouter()
 
+_NIUNIU_ADJECTIVES = [
+    "稳健", "勇敢", "智慧", "灵动", "坚韧",
+    "敏锐", "果敢", "沉着", "睿智", "豪迈",
+    "从容", "精明", "淡定", "乐观", "坚定",
+    "机敏", "豁达", "谦逊", "刚毅", "沉稳",
+]
+
+_NIUNIU_NOUNS = [
+    "猎手", "先锋", "舵手", "骑手", "探路者",
+    "守望者", "领航员", "分析师", "操盘手", "策略师",
+    "投资者", "交易员", "研究员", "战略家", "指挥官",
+    "护卫者", "开拓者", "远航者", "逐浪者", "攀登者",
+]
+
+
+def _generate_niuniu_nickname() -> str:
+    adj = random.choice(_NIUNIU_ADJECTIVES)
+    noun = random.choice(_NIUNIU_NOUNS)
+    return f"牛牛{adj}{noun}"
+
 
 class UpdateUserRequest(BaseModel):
-    """更新用户信息请求"""
     email: Optional[str] = None
     password: Optional[str] = None
     new_password: Optional[str] = None
+    nickname: Optional[str] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -48,10 +69,12 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         )
     
     hashed_password = get_password_hash(user_data.password)
+    nickname = user_data.nickname or _generate_niuniu_nickname()
     db_user = UserModel(
         username=user_data.username,
         email=user_data.email,
         hashed_password=hashed_password,
+        nickname=nickname,
     )
     db.add(db_user)
     db.commit()
@@ -113,7 +136,10 @@ async def update_user(
                 detail="邮箱已被使用"
             )
         current_user.email = update_data.email
-    
+
+    if update_data.nickname is not None:
+        current_user.nickname = update_data.nickname
+
     db.commit()
     db.refresh(current_user)
     return current_user

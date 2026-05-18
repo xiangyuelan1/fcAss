@@ -56,6 +56,7 @@ _MIGRATION_COLUMNS = {
         ("last_login_at", "DATETIME"),
         ("last_login_ip", "VARCHAR(45)"),
         ("last_heartbeat", "DATETIME"),
+        ("nickname", "VARCHAR(50)"),
     ],
     "user_models": [
         ("feature_config", "JSON"),
@@ -71,6 +72,20 @@ _MIGRATION_COLUMNS = {
     "payment_config": [
         ("register_fee", "DECIMAL(10,2) DEFAULT 1.00"),
         ("pay_type", "VARCHAR(20) DEFAULT 'alipay'"),
+    ],
+}
+
+_MIGRATION_TABLES = {
+    "follows": [
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("follower_id", "INTEGER NOT NULL"),
+        ("following_id", "INTEGER NOT NULL"),
+        ("created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP"),
+    ],
+    "follows_indexes": [
+        "CREATE INDEX IF NOT EXISTS ix_follows_follower_id ON follows(follower_id)",
+        "CREATE INDEX IF NOT EXISTS ix_follows_following_id ON follows(following_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_follow_pair ON follows(follower_id, following_id)",
     ],
 }
 
@@ -105,6 +120,38 @@ def _migrate_db():
                     migrated = True
                 except Exception as e:
                     logger.warning(f"[迁移] 添加 {table_name}.{col_name} 失败: {e}")
+
+    insp = inspect(engine)
+    for table_name, columns in _MIGRATION_TABLES.items():
+        if table_name.endswith("_indexes"):
+            continue
+        if not insp.has_table(table_name):
+            col_defs = ", ".join(f"{col_name} {col_type}" for col_name, col_type in columns)
+            sql = f"CREATE TABLE {table_name} ({col_defs})"
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(sql))
+                    conn.commit()
+                logger.info(f"[迁移] 表 {table_name} 已创建")
+                migrated = True
+            except Exception as e:
+                logger.warning(f"[迁移] 创建表 {table_name} 失败: {e}")
+
+    index_key = None
+    for table_name in _MIGRATION_TABLES:
+        if table_name.endswith("_indexes"):
+            index_key = table_name
+    if index_key:
+        for idx_sql in _MIGRATION_TABLES[index_key]:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(idx_sql))
+                    conn.commit()
+                logger.info(f"[迁移] 索引已创建: {idx_sql}")
+                migrated = True
+            except Exception as e:
+                logger.warning(f"[迁移] 创建索引失败: {e}: {idx_sql}")
+
     if migrated:
         print("[OK] 数据库增量迁移完成")
     else:

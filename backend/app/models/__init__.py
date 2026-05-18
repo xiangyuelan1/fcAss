@@ -7,6 +7,7 @@ from app.models.community import CommunityModel, CommunitySignal, CommunityLike,
 from app.models.message import Message
 from app.models.watchlist import Watchlist, WatchlistItem
 from app.models.daily_guess import DailyGuessStock, DailyGuessVote
+from app.models.follow import Follow
 
 __all__ = [
     "Stock",
@@ -30,4 +31,5 @@ __all__ = [
     "WatchlistItem",
     "DailyGuessStock",
     "DailyGuessVote",
+    "Follow",
 ]

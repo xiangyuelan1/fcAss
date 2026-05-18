@@ -13,6 +13,9 @@ export interface PredictionResultProps {
   predictedChangePct?: number | null
   priceRangeLow?: number | null
   priceRangeHigh?: number | null
+  predictedVolatility?: number | null
+  predictedVolumeChange?: number | null
+  targetType?: string
 }
 
 interface PredictionAnimationProps {
@@ -276,6 +279,9 @@ export const PredictionResult: React.FC<PredictionResultProps> = ({
   predictedChangePct,
   priceRangeLow,
   priceRangeHigh,
+  predictedVolatility,
+  predictedVolumeChange,
+  targetType,
 }) => {
   useEffect(() => { injectKeyframes() }, [])
 
@@ -327,6 +333,24 @@ export const PredictionResult: React.FC<PredictionResultProps> = ({
       {priceRangeLow != null && priceRangeHigh != null && (
         <div style={{ fontSize: 13, color: '#888', marginBottom: 12 }}>
           价格区间: ¥{priceRangeLow.toFixed(2)} ~ ¥{priceRangeHigh.toFixed(2)}
+        </div>
+      )}
+
+      {/* 多维预测数据 */}
+      {targetType === 'multi_feature_next_day' && (predictedVolatility != null || predictedVolumeChange != null) && (
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 24, marginBottom: 12 }}>
+          {predictedVolatility != null && (
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 11, color: '#999', marginBottom: 2 }}>波动率</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: '#1890ff' }}>{predictedVolatility.toFixed(6)}</div>
+            </div>
+          )}
+          {predictedVolumeChange != null && (
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 11, color: '#999', marginBottom: 2 }}>量变率</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: '#722ed1' }}>{predictedVolumeChange.toFixed(6)}</div>
+            </div>
+          )}
         </div>
       )}
 

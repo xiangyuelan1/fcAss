@@ -104,17 +104,41 @@ const ModelList: React.FC = () => {
     }
   }
 
-  const handleTrain = async (model: UserModel) => {
-    try {
-      await trainingApi.createTask({
-        model_id: model.id,
-        config: {},
-      })
-      message.success('训练任务已创建')
-      navigate('/training')
-    } catch (error) {
-      message.error('创建训练任务失败')
-    }
+  const getEstimatedTime = (modelType: string) => {
+    const deepLearningTypes = ['lstm', 'gru']
+    const treeTypes = ['xgboost', 'lightgbm', 'randomforest']
+    const lower = modelType.toLowerCase()
+    if (deepLearningTypes.includes(lower)) return '深度学习模型通常需要 3-15 分钟'
+    if (lower === 'mlp') return 'MLP模型通常需要 2-10 分钟'
+    if (treeTypes.includes(lower)) return '树模型通常需要 1-5 分钟'
+    return '训练通常需要 1-15 分钟'
+  }
+
+  const handleTrain = (model: UserModel) => {
+    Modal.confirm({
+      title: '确认开始训练',
+      content: (
+        <div>
+          <p>即将训练模型：<strong>{model.name}</strong></p>
+          <p>预估训练时间：{getEstimatedTime(model.model_type)}</p>
+          <p style={{ color: '#999', fontSize: 12 }}>训练期间请勿关闭页面</p>
+        </div>
+      ),
+      okText: '开始训练',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await trainingApi.createTask({
+            model_id: model.id,
+            config: {},
+          })
+          message.success('训练任务已创建')
+          navigate('/training')
+        } catch (error) {
+          message.error('创建训练任务失败')
+        }
+      },
+    })
   }
 
   const handlePin = async (model: UserModel) => {

@@ -519,18 +519,44 @@ async def check_stale_data(db: Session = Depends(get_db)):
 @router.get("/stocks/search")
 async def search_stock_pool(
     q: str = Query(..., min_length=1, description="搜索关键词（代码或名称）"),
+    industry: Optional[str] = Query(None, description="行业筛选"),
     limit: int = Query(20, ge=1, le=100, description="返回条数"),
     db: Session = Depends(get_db),
 ):
-    """搜索A股股票池（按代码或名称模糊搜索，只查 stocks 表）"""
     pattern = f"%{q}%"
-    stocks = (
-        db.query(Stock)
-        .filter((Stock.code.like(pattern)) | (Stock.name.like(pattern)))
-        .limit(limit)
-        .all()
+    query = db.query(Stock).filter(
+        (Stock.code.like(pattern)) | (Stock.name.like(pattern))
     )
+    if industry:
+        query = query.filter(Stock.industry == industry)
+    stocks = query.limit(limit).all()
     return [s.to_dict() for s in stocks]
+
+
+@router.get("/stocks/pool")
+async def get_stock_pool(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    industry: Optional[str] = Query(None, description="行业筛选"),
+    exchange: Optional[str] = Query(None, description="交易所筛选(SH/SZ)"),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Stock)
+    if industry:
+        query = query.filter(Stock.industry == industry)
+    if exchange:
+        query = query.filter(Stock.exchange == exchange)
+
+    total = query.count()
+    offset = (page - 1) * page_size
+    stocks = query.order_by(Stock.code).offset(offset).limit(page_size).all()
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "stocks": [s.to_dict() for s in stocks],
+    }
 
 
 @router.post("/stocks/sync-pool")

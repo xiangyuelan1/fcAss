@@ -317,6 +317,37 @@ const TrainingTasks: React.FC = () => {
     )
   }
 
+  const stageMap: Record<string, string> = {
+    data_preparation: '数据准备中',
+    training: '模型训练中',
+    validation: '验证中',
+    completed: '训练完成',
+  }
+
+  const formatDuration = (seconds: number) => {
+    if (seconds < 60) return `${Math.floor(seconds)}秒`
+    const minutes = Math.floor(seconds / 60)
+    const secs = Math.floor(seconds % 60)
+    if (minutes < 60) return `${minutes}分${secs}秒`
+    const hours = Math.floor(minutes / 60)
+    const mins = minutes % 60
+    return `${hours}时${mins}分`
+  }
+
+  const getElapsedTime = (task: TrainingTask) => {
+    if (!task.start_time) return 0
+    const start = new Date(task.start_time).getTime()
+    const end = task.end_time ? new Date(task.end_time).getTime() : Date.now()
+    return (end - start) / 1000
+  }
+
+  const getEstimatedRemaining = (progress: number, elapsedSeconds: number) => {
+    if (progress <= 0 || progress >= 100) return null
+    const estimatedTotal = elapsedSeconds / (progress / 100)
+    const remaining = estimatedTotal - elapsedSeconds
+    return Math.max(0, remaining)
+  }
+
   const columns = [
     {
       title: '任务ID',
@@ -347,20 +378,44 @@ const TrainingTasks: React.FC = () => {
       render: (status: string, record: TrainingTask) => (
         <div>
           {getStatusTag(status)}
-          {status === 'running' && progressMap[record.id] && (
-            <div style={{ marginTop: 8 }}>
-              <Progress
-                percent={progressMap[record.id].progress || 0}
-                size="small"
-                style={{ width: 120 }}
-                status="active"
-              />
-              {progressMap[record.id].epoch && (
-                <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
-                  Epoch {progressMap[record.id].epoch}
-                  {progressMap[record.id].train_loss != null && ` | Loss: ${progressMap[record.id].train_loss.toFixed(4)}`}
+          {status === 'running' && progressMap[record.id] && (() => {
+            const progress = progressMap[record.id]
+            const percent = progress.progress || 0
+            const elapsed = getElapsedTime(record)
+            const remaining = getEstimatedRemaining(percent, elapsed)
+            const stageText = stageMap[progress.stage] || (progress.stage ? progress.stage : '处理中')
+            const model = models[record.model_id]
+            const isDeepLearning = model && ['lstm', 'gru'].includes(model.model_type.toLowerCase())
+            return (
+              <div style={{ marginTop: 8 }}>
+                <Progress
+                  percent={percent}
+                  size="small"
+                  style={{ width: 150 }}
+                  status="active"
+                />
+                <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                  {stageText}
+                  {' · '}
+                  已用 {formatDuration(elapsed)}
+                  {remaining !== null && remaining > 0 && (
+                    <> · 预计剩余 {formatDuration(remaining)}</>
+                  )}
                 </div>
-              )}
+                {isDeepLearning && progress.epoch && (
+                  <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
+                    Epoch {progress.epoch}
+                    {progress.total_epochs ? ` / ${progress.total_epochs}` : ''}
+                    {progress.train_loss != null && ` | Loss: ${progress.train_loss.toFixed(4)}`}
+                    {progress.val_loss != null && ` | Val Loss: ${progress.val_loss.toFixed(4)}`}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+          {status === 'running' && !progressMap[record.id] && (
+            <div style={{ marginTop: 4, fontSize: 11, color: '#999' }}>
+              等待进度数据...
             </div>
           )}
           {record.status === 'completed' && backtestResults[record.id] && (

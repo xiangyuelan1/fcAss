@@ -46,6 +46,12 @@ class PredictResponse(BaseModel):
     price_range_low: Optional[float] = None
     price_range_high: Optional[float] = None
     latest_data: Optional[Dict[str, Any]] = None
+    predicted_volatility: Optional[float] = None
+    predicted_volume_change: Optional[float] = None
+    target_type: Optional[str] = None
+    probability_up: Optional[float] = None
+    probability_down: Optional[float] = None
+    daily_avg_change_pct: Optional[float] = None
 
 
 class BatchPredictRequest(BaseModel):
@@ -163,6 +169,8 @@ async def predict(
 
     predict_date = (datetime.now() + timedelta(days=request.days)).strftime('%Y-%m-%d')
 
+    multi_features = _compute_multi_features(prediction, target, df, latest_close)
+
     return PredictResponse(
         task_id=request.task_id,
         stock_code=request.stock_code,
@@ -175,6 +183,12 @@ async def predict(
         price_range_low=price_range_low,
         price_range_high=price_range_high,
         latest_data=latest_data,
+        predicted_volatility=multi_features.get('predicted_volatility'),
+        predicted_volume_change=multi_features.get('predicted_volume_change'),
+        target_type=multi_features.get('target_type'),
+        probability_up=multi_features.get('probability_up'),
+        probability_down=multi_features.get('probability_down'),
+        daily_avg_change_pct=multi_features.get('daily_avg_change_pct'),
     )
 
 
@@ -340,7 +354,6 @@ def _compute_predicted_change_pct(prediction: float, target: str) -> Optional[fl
     price_change_5d: 5日变化率 → 百分比
     """
     if target == 'next_day_direction':
-        # 概率映射：0.5 → 0%, 1.0 → +5%, 0.0 → -5%
         return (prediction - 0.5) * 10
     elif target == 'next_day_return':
         return prediction * 100
@@ -348,3 +361,33 @@ def _compute_predicted_change_pct(prediction: float, target: str) -> Optional[fl
         return prediction * 100
     else:
         return prediction * 100
+
+
+def _compute_multi_features(prediction: float, target: str, df, latest_close: Optional[float]) -> Dict[str, Any]:
+    """根据预测值和目标类型推导多维数据
+
+    multi_feature_next_day: 基于近期波动率和成交量变化趋势推导
+    next_day_direction: 拆分上涨/下跌概率
+    price_change_5d: 计算日均变化率
+    """
+    result: Dict[str, Any] = {'target_type': target}
+
+    if target == 'multi_feature_next_day':
+        recent_returns = df['close'].pct_change().tail(20).dropna()
+        if len(recent_returns) > 0:
+            base_volatility = float(recent_returns.std())
+            result['predicted_volatility'] = round(base_volatility * (1 + abs(prediction) * 5), 6)
+        if 'volume' in df.columns:
+            recent_vol_change = df['volume'].pct_change().tail(20).dropna()
+            if len(recent_vol_change) > 0:
+                result['predicted_volume_change'] = round(float(recent_vol_change.mean() + prediction * 2), 6)
+
+    elif target == 'next_day_direction':
+        result['probability_up'] = round(float(prediction), 4)
+        result['probability_down'] = round(float(1 - prediction), 4)
+
+    elif target == 'price_change_5d':
+        if prediction is not None:
+            result['daily_avg_change_pct'] = round(float(prediction * 100 / 5), 4)
+
+    return result

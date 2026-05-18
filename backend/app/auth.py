@@ -29,6 +29,7 @@ class TokenData(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
+    nickname: Optional[str] = None
     email: Optional[str] = None
     is_active: bool = True
     is_admin: bool = False
@@ -40,6 +41,7 @@ class UserCreate(BaseModel):
     username: str
     email: Optional[str] = None
     password: str
+    nickname: Optional[str] = None
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

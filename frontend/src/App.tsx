@@ -15,7 +15,9 @@ import PaymentConfig from './pages/PaymentConfig'
 import AdminUsers from './pages/AdminUsers'
 import AdminConfig from './pages/AdminConfig'
 import LoginPage from './pages/Login'
+import BacktestResults from './pages/BacktestResults'
 import WatchlistPage from './pages/Watchlist'
+import StockPoolPage from './pages/StockPool'
 import { useAuthStore } from './store'
 
 const Community = React.lazy(() => import('@/pages/Community'))
@@ -26,6 +28,7 @@ const Profile = React.lazy(() => import('@/pages/Profile'))
 const ContactUs = React.lazy(() => import('@/pages/ContactUs'))
 const AdminMessages = React.lazy(() => import('@/pages/AdminMessages'))
 const DailyGuessPage = React.lazy(() => import('@/pages/DailyGuessPage'))
+const UserProfile = React.lazy(() => import('@/pages/UserProfile'))
 
 const LazyFallback = () => (
   <div style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -78,8 +81,9 @@ const App: React.FC = () => {
             <Route path="/models/build" element={<ModelBuilder />} />
             <Route path="/models/build/:id" element={<ModelBuilder />} />
             <Route path="/watchlist" element={<WatchlistPage />} />
+            <Route path="/stock-pool" element={<StockPoolPage />} />
             <Route path="/training" element={<TrainingTasks />} />
-            <Route path="/backtest" element={<Navigate to="/training" replace />} />
+            <Route path="/backtest" element={<BacktestResults />} />
             <Route path="/prediction" element={<Prediction />} />
             <Route path="/payment-config" element={<PaymentConfig />} />
             <Route path="/community" element={<Suspense fallback={<LazyFallback />}><Community /></Suspense>} />
@@ -87,6 +91,7 @@ const App: React.FC = () => {
             <Route path="/community/leaderboard" element={<Suspense fallback={<LazyFallback />}><Leaderboard /></Suspense>} />
             <Route path="/community/model/:id" element={<Suspense fallback={<LazyFallback />}><CommunityModelDetail /></Suspense>} />
             <Route path="/community/daily-guess" element={<Suspense fallback={<LazyFallback />}><DailyGuessPage /></Suspense>} />
+            <Route path="/user/:id" element={<Suspense fallback={<LazyFallback />}><UserProfile /></Suspense>} />
             <Route path="/profile" element={<Suspense fallback={<LazyFallback />}><Profile /></Suspense>} />
             <Route path="/contact" element={<Suspense fallback={<LazyFallback />}><ContactUs /></Suspense>} />
             <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />

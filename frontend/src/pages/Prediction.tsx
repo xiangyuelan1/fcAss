@@ -47,6 +47,12 @@ interface PredictionRecord {
   model_name: string
   model_type: string
   timestamp: number
+  predicted_volatility?: number | null
+  predicted_volume_change?: number | null
+  target_type?: string
+  probability_up?: number | null
+  probability_down?: number | null
+  daily_avg_change_pct?: number | null
 }
 
 interface RealtimeQuote {
@@ -147,6 +153,12 @@ const Prediction: React.FC = () => {
       model_name: model ? model.name : `模型#${task?.model_id}`,
       model_type: model?.model_type || '',
       timestamp: Date.now(),
+      predicted_volatility: result.predicted_volatility ?? null,
+      predicted_volume_change: result.predicted_volume_change ?? null,
+      target_type: result.target_type ?? null,
+      probability_up: result.probability_up ?? null,
+      probability_down: result.probability_down ?? null,
+      daily_avg_change_pct: result.daily_avg_change_pct ?? null,
     }
     setHistoryRecords((prev) => [record, ...prev])
   }
@@ -375,7 +387,8 @@ const Prediction: React.FC = () => {
             <Descriptions.Item label="预测目标">
               {selectedModel.target === 'next_day_return' ? '次日收益率' :
                selectedModel.target === 'next_day_direction' ? '次日涨跌方向' :
-               selectedModel.target === 'price_change_5d' ? '5日价格变化' : selectedModel.target}
+               selectedModel.target === 'price_change_5d' ? '5日价格变化' :
+               selectedModel.target === 'multi_feature_next_day' ? '多维预测（收益率+波动率+量变率）' : selectedModel.target}
             </Descriptions.Item>
             <Descriptions.Item label="特征数量">{selectedModel.features?.length || 0}个指标</Descriptions.Item>
           </Descriptions>
@@ -412,6 +425,154 @@ const Prediction: React.FC = () => {
         const changePct = latestResult.predicted_change_pct
         const isUp = changePct !== null && changePct !== undefined && changePct > 0
         const isDown = changePct !== null && changePct !== undefined && changePct < 0
+        const targetType = latestResult.target_type || selectedModel?.target || 'next_day_return'
+        const isTrainingStock = predictableStocks.some(s => s.code === latestResult.stock_code)
+        const trainingStockNames = predictableStocks.map(s => `${s.code} ${s.name}`).join('、')
+
+        const renderTargetSpecificCards = () => {
+          if (targetType === 'next_day_direction') {
+            return (
+              <>
+                <Col span={12}>
+                  <Card>
+                    <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>上涨概率</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ flex: 1, height: 16, borderRadius: 8, background: '#f0f0f0', overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%',
+                          width: `${(latestResult.probability_up ?? 0) * 100}%`,
+                          borderRadius: 8,
+                          background: '#f5222d',
+                          transition: 'width 0.6s ease',
+                        }} />
+                      </div>
+                      <span style={{ fontWeight: 700, color: '#f5222d', minWidth: 60, textAlign: 'right' }}>
+                        {((latestResult.probability_up ?? 0) * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card>
+                    <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>下跌概率</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ flex: 1, height: 16, borderRadius: 8, background: '#f0f0f0', overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%',
+                          width: `${(latestResult.probability_down ?? 0) * 100}%`,
+                          borderRadius: 8,
+                          background: '#52c41a',
+                          transition: 'width 0.6s ease',
+                        }} />
+                      </div>
+                      <span style={{ fontWeight: 700, color: '#52c41a', minWidth: 60, textAlign: 'right' }}>
+                        {((latestResult.probability_down ?? 0) * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  </Card>
+                </Col>
+              </>
+            )
+          }
+
+          if (targetType === 'price_change_5d') {
+            return (
+              <>
+                <Col span={12}>
+                  <Card>
+                    <Statistic
+                      title="5日累计变化"
+                      value={changePct ?? 0}
+                      precision={2}
+                      suffix="%"
+                      prefix={isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
+                      valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
+                    />
+                  </Card>
+                </Col>
+                <Col span={12}>
+                  <Card>
+                    <Statistic
+                      title="日均变化率"
+                      value={latestResult.daily_avg_change_pct ?? 0}
+                      precision={4}
+                      suffix="%"
+                      valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
+                    />
+                  </Card>
+                </Col>
+              </>
+            )
+          }
+
+          if (targetType === 'multi_feature_next_day') {
+            return (
+              <>
+                <Col span={8}>
+                  <Card>
+                    <Statistic
+                      title="预测收益率"
+                      value={changePct ?? 0}
+                      precision={2}
+                      suffix="%"
+                      prefix={isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
+                      valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
+                    />
+                  </Card>
+                </Col>
+                <Col span={8}>
+                  <Card>
+                    <Statistic
+                      title="预测波动率"
+                      value={latestResult.predicted_volatility ?? 0}
+                      precision={6}
+                      valueStyle={{ color: '#1890ff' }}
+                    />
+                  </Card>
+                </Col>
+                <Col span={8}>
+                  <Card>
+                    <Statistic
+                      title="预测量变率"
+                      value={latestResult.predicted_volume_change ?? 0}
+                      precision={6}
+                      valueStyle={{ color: '#722ed1' }}
+                    />
+                  </Card>
+                </Col>
+              </>
+            )
+          }
+
+          return (
+            <>
+              <Col span={12}>
+                <Card>
+                  <Statistic
+                    title="预测目标价格"
+                    value={latestResult.predicted_price ?? latestResult.latest_data?.close ?? 0}
+                    prefix="¥"
+                    precision={2}
+                    valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : undefined}
+                  />
+                </Card>
+              </Col>
+              <Col span={12}>
+                <Card>
+                  <Statistic
+                    title="预测涨跌幅"
+                    value={changePct ?? 0}
+                    precision={2}
+                    suffix="%"
+                    prefix={isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
+                    valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
+                  />
+                </Card>
+              </Col>
+            </>
+          )
+        }
+
         return (
           <Card title="最新预测结果" style={{ marginBottom: 24 }}>
             <Row gutter={[16, 16]}>
@@ -431,6 +592,9 @@ const Prediction: React.FC = () => {
                     predictedChangePct={latestResult.predicted_change_pct}
                     priceRangeLow={latestResult.price_range_low}
                     priceRangeHigh={latestResult.price_range_high}
+                    predictedVolatility={latestResult.predicted_volatility}
+                    predictedVolumeChange={latestResult.predicted_volume_change}
+                    targetType={targetType}
                   />
                 </Card>
               </Col>
@@ -445,29 +609,7 @@ const Prediction: React.FC = () => {
                       />
                     </Card>
                   </Col>
-                  <Col span={12}>
-                    <Card>
-                      <Statistic
-                        title="预测目标价格"
-                        value={latestResult.predicted_price ?? latestResult.latest_data?.close ?? 0}
-                        prefix="¥"
-                        precision={2}
-                        valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : undefined}
-                      />
-                    </Card>
-                  </Col>
-                  <Col span={12}>
-                    <Card>
-                      <Statistic
-                        title="预测涨跌幅"
-                        value={changePct ?? 0}
-                        precision={2}
-                        suffix="%"
-                        prefix={isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
-                        valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
-                      />
-                    </Card>
-                  </Col>
+                  {renderTargetSpecificCards()}
                   <Col span={12}>
                     <Card>
                       <Statistic
@@ -495,6 +637,16 @@ const Prediction: React.FC = () => {
                 </Row>
               </Col>
             </Row>
+
+            {!isTrainingStock && (
+              <Alert
+                style={{ marginTop: 16 }}
+                message="跨股票预测提示"
+                description={`此模型使用 ${trainingStockNames || '其他股票'} 数据训练，预测当前股票基于特征模式泛化，结果仅供参考。模型学习的是技术指标组合的特征模式，而非特定股票的规律。`}
+                type="info"
+                showIcon
+              />
+            )}
 
             {/* 实时行情 */}
             {realtimeQuote && (

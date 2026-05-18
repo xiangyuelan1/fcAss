@@ -86,6 +86,9 @@ export const dataApi = {
   searchStockPool: (q: string) =>
     api.get('/data/stocks/search', { params: { q } }),
 
+  getStockPool: (params?: { page?: number; page_size?: number; industry?: string; exchange?: string }) =>
+    api.get('/data/stocks/pool', { params }),
+
   syncStockPool: () =>
     api.post('/data/stocks/sync-pool'),
 
@@ -469,6 +472,17 @@ export const dailyGuessApi = {
   getToday: () => api.get('/daily-guess/today'),
   vote: (direction: 'up' | 'down') => api.post('/daily-guess/vote', { direction }),
   getHistory: () => api.get('/daily-guess/history'),
+};
+
+export const socialApi = {
+  getUserProfile: (userId: number) => api.get(`/social/users/${userId}/profile`),
+  followUser: (userId: number) => api.post(`/social/users/${userId}/follow`),
+  unfollowUser: (userId: number) => api.delete(`/social/users/${userId}/follow`),
+  getFollowers: (userId: number, params?: { page?: number; page_size?: number }) =>
+    api.get(`/social/users/${userId}/followers`, { params }),
+  getFollowing: (userId: number, params?: { page?: number; page_size?: number }) =>
+    api.get(`/social/users/${userId}/following`, { params }),
+  getFollowingUpdates: () => api.get('/social/following/updates'),
 };
 
 export default api;

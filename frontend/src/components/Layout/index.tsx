@@ -24,6 +24,8 @@ import {
   StarOutlined,
   BellOutlined,
   BulbOutlined,
+  StockOutlined,
+  HeartOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/store'
@@ -120,6 +122,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         { key: '/community/daily-guess', icon: <BulbOutlined />, label: '每日一猜' },
         { key: '/community/pk', icon: <TrophyOutlined />, label: 'PK竞技' },
         { key: '/community/leaderboard', icon: <TrophyOutlined />, label: '排行榜' },
+        { key: '/profile?tab=following-updates', icon: <HeartOutlined />, label: '关注动态' },
       ],
     },
     {
@@ -133,6 +136,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: '模型管理',
       children: [
         { key: '/models', icon: <RobotOutlined />, label: '我的模型' },
+        { key: '/stock-pool', icon: <StockOutlined />, label: '股票池' },
         { key: '/watchlist', icon: <StarOutlined />, label: '自选股' },
         { key: '/features', icon: <ToolOutlined />, label: '特征工程' },
       ],
@@ -201,6 +205,11 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const handleMenuClick = (key: string) => {
     if (key === '__onboarding__') {
       setOnboardingVisible(true)
+      return
+    }
+    if (key.includes('?')) {
+      const [path, search] = key.split('?')
+      navigate({ pathname: path, search: `?${search}` })
       return
     }
     navigate(key)

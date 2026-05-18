@@ -368,3 +368,33 @@ export interface Message {
   created_at: string;
   replies?: Message[];
 }
+
+export interface UserProfile {
+  id: number;
+  username: string;
+  nickname?: string;
+  created_at: string;
+  models_count: number;
+  followers_count: number;
+  following_count: number;
+  is_following?: boolean;
+  models?: CommunityModel[];
+}
+
+export interface FollowUser {
+  id: number;
+  username: string;
+  nickname?: string;
+  is_following?: boolean;
+  created_at?: string;
+}
+
+export interface FollowingUpdate {
+  type: string;
+  user_id: number;
+  username: string;
+  nickname?: string;
+  description: string;
+  created_at: string;
+  target_id?: number;
+}

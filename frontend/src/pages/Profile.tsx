@@ -15,6 +15,9 @@ import {
   message,
   Descriptions,
   Statistic,
+  List,
+  Space,
+  Modal,
 } from 'antd'
 import {
   LockOutlined,
@@ -25,10 +28,16 @@ import {
   CheckCircleOutlined,
   LockFilled,
   ThunderboltOutlined,
+  EditOutlined,
+  TeamOutlined,
+  UserOutlined,
+  BellOutlined,
 } from '@ant-design/icons'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '@/store'
-import { authApi, pointsApi, communityApi } from '@/services/api'
-import { PointTransaction, AchievementBadge, CommunityModel } from '@/types'
+import { authApi, pointsApi, communityApi, socialApi } from '@/services/api'
+import api from '@/services/api'
+import { PointTransaction, AchievementBadge, CommunityModel, FollowUser, FollowingUpdate } from '@/types'
 
 const BADGE_ICON_MAP: Record<string, { icon: React.ReactNode; color: string }> = {
   first_model: { icon: <GlobalOutlined />, color: '#13c2c2' },
@@ -55,8 +64,15 @@ const MODEL_TYPE_COLORS: Record<string, string> = {
   mlp: 'purple',
 }
 
+const UPDATE_TYPE_LABELS: Record<string, string> = {
+  new_model: '发布了新模型',
+  new_signal: '发布了新信号',
+}
+
 const Profile: React.FC = () => {
-  const { user } = useAuthStore()
+  const { user, setUser } = useAuthStore()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [balance, setBalance] = useState<number>(0)
   const [level, setLevel] = useState<number>(1)
   const [checkedIn, setCheckedIn] = useState(false)
@@ -70,9 +86,34 @@ const Profile: React.FC = () => {
   const [passwordLoading, setPasswordLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('password')
 
+  const [nicknameEditing, setNicknameEditing] = useState(false)
+  const [nicknameValue, setNicknameValue] = useState('')
+  const [nicknameLoading, setNicknameLoading] = useState(false)
+
+  const [followersCount, setFollowersCount] = useState(0)
+  const [followingCount, setFollowingCount] = useState(0)
+  const [followers, setFollowers] = useState<FollowUser[]>([])
+  const [following, setFollowing] = useState<FollowUser[]>([])
+  const [followersLoading, setFollowersLoading] = useState(false)
+  const [followingLoading, setFollowingLoading] = useState(false)
+  const [followersModalOpen, setFollowersModalOpen] = useState(false)
+  const [followingModalOpen, setFollowingModalOpen] = useState(false)
+
+  const [followingUpdates, setFollowingUpdates] = useState<FollowingUpdate[]>([])
+  const [followingUpdatesLoading, setFollowingUpdatesLoading] = useState(false)
+
   useEffect(() => {
     fetchBalance()
+    fetchSocialCounts()
   }, [])
+
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab && tab !== activeTab) {
+      setActiveTab(tab)
+      if (tab === 'following-updates') fetchFollowingUpdates()
+    }
+  }, [searchParams])
 
   const fetchBalance = async () => {
     try {
@@ -82,6 +123,40 @@ const Profile: React.FC = () => {
     } catch {
       message.error('获取积分信息失败')
     }
+  }
+
+  const fetchSocialCounts = async () => {
+    if (!user?.id) return
+    try {
+      const data = await socialApi.getUserProfile(user.id)
+      setFollowersCount((data as any)?.followers_count ?? 0)
+      setFollowingCount((data as any)?.following_count ?? 0)
+    } catch {}
+  }
+
+  const handleNicknameEdit = () => {
+    setNicknameValue((user as any)?.nickname || '')
+    setNicknameEditing(true)
+  }
+
+  const handleNicknameSave = async () => {
+    setNicknameLoading(true)
+    try {
+      await api.put('/auth/me', { nickname: nicknameValue })
+      const freshUser = await authApi.getMe()
+      setUser(freshUser as any)
+      setNicknameEditing(false)
+      message.success('昵称更新成功')
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail || '昵称更新失败'
+      message.error(typeof detail === 'string' ? detail : '昵称更新失败')
+    } finally {
+      setNicknameLoading(false)
+    }
+  }
+
+  const handleNicknameCancel = () => {
+    setNicknameEditing(false)
   }
 
   const handleCheckin = async () => {
@@ -142,11 +217,65 @@ const Profile: React.FC = () => {
     }
   }
 
+  const fetchFollowers = async () => {
+    if (!user?.id) return
+    setFollowersLoading(true)
+    try {
+      const data = await socialApi.getFollowers(user.id, { page_size: 50 })
+      setFollowers((data as any)?.items || (Array.isArray(data) ? data : []))
+    } catch {
+      message.error('获取粉丝列表失败')
+    } finally {
+      setFollowersLoading(false)
+    }
+  }
+
+  const fetchFollowing = async () => {
+    if (!user?.id) return
+    setFollowingLoading(true)
+    try {
+      const data = await socialApi.getFollowing(user.id, { page_size: 50 })
+      setFollowing((data as any)?.items || (Array.isArray(data) ? data : []))
+    } catch {
+      message.error('获取关注列表失败')
+    } finally {
+      setFollowingLoading(false)
+    }
+  }
+
+  const fetchFollowingUpdates = async () => {
+    setFollowingUpdatesLoading(true)
+    try {
+      const data = await socialApi.getFollowingUpdates()
+      setFollowingUpdates((data as any)?.items || (Array.isArray(data) ? data : []))
+    } catch {
+      message.error('获取关注动态失败')
+    } finally {
+      setFollowingUpdatesLoading(false)
+    }
+  }
+
+  const handleFollowToggle = async (targetUserId: number, isFollowing: boolean) => {
+    try {
+      if (isFollowing) {
+        await socialApi.unfollowUser(targetUserId)
+      } else {
+        await socialApi.followUser(targetUserId)
+      }
+      fetchSocialCounts()
+      if (followersModalOpen) fetchFollowers()
+      if (followingModalOpen) fetchFollowing()
+    } catch {
+      message.error('操作失败')
+    }
+  }
+
   const handleTabChange = (key: string) => {
     setActiveTab(key)
     if (key === 'transactions' && transactions.length === 0) fetchTransactions()
     if (key === 'achievements' && achievements.length === 0) fetchAchievements()
     if (key === 'models' && myModels.length === 0) fetchMyModels()
+    if (key === 'following-updates' && followingUpdates.length === 0) fetchFollowingUpdates()
   }
 
   const handlePasswordSubmit = async (values: { old_password: string; new_password: string }) => {
@@ -167,6 +296,50 @@ const Profile: React.FC = () => {
   }
 
   const [passwordForm] = Form.useForm()
+
+  const renderFollowUserItem = (item: FollowUser) => (
+    <List.Item
+      actions={[
+        user?.id !== item.id ? (
+          <Button
+            size="small"
+            type={item.is_following ? 'default' : 'primary'}
+            onClick={() => handleFollowToggle(item.id, !!item.is_following)}
+          >
+            {item.is_following ? '已关注' : '关注'}
+          </Button>
+        ) : null,
+      ]}
+    >
+      <List.Item.Meta
+        avatar={
+          <Avatar
+            size="small"
+            style={{ backgroundColor: '#1890ff', cursor: 'pointer' }}
+            onClick={() => {
+              setFollowersModalOpen(false)
+              setFollowingModalOpen(false)
+              navigate(`/user/${item.id}`)
+            }}
+          >
+            {(item.nickname || item.username)?.[0]?.toUpperCase() || '?'}
+          </Avatar>
+        }
+        title={
+          <a
+            onClick={() => {
+              setFollowersModalOpen(false)
+              setFollowingModalOpen(false)
+              navigate(`/user/${item.id}`)
+            }}
+          >
+            {item.nickname || item.username}
+          </a>
+        }
+        description={item.nickname ? `@${item.username}` : undefined}
+      />
+    </List.Item>
+  )
 
   const transactionColumns = [
     {
@@ -430,9 +603,73 @@ const Profile: React.FC = () => {
         </Spin>
       ),
     },
+    {
+      key: 'following-updates',
+      label: (
+        <span>
+          <BellOutlined /> 关注动态
+        </span>
+      ),
+      children: (
+        <Spin spinning={followingUpdatesLoading}>
+          {followingUpdates.length === 0 && !followingUpdatesLoading ? (
+            <Empty description="暂无关注动态" />
+          ) : (
+            <List
+              dataSource={followingUpdates}
+              renderItem={(item) => (
+                <List.Item
+                  actions={
+                    item.target_id && item.type === 'new_model'
+                      ? [
+                          <Button
+                            key="view"
+                            size="small"
+                            type="link"
+                            onClick={() => navigate(`/community/model/${item.target_id}`)}
+                          >
+                            查看模型
+                          </Button>,
+                        ]
+                      : undefined
+                  }
+                >
+                  <List.Item.Meta
+                    avatar={
+                      <Avatar
+                        size="small"
+                        style={{ backgroundColor: '#1890ff', cursor: 'pointer' }}
+                        onClick={() => navigate(`/user/${item.user_id}`)}
+                      >
+                        {(item.nickname || item.username)?.[0]?.toUpperCase() || '?'}
+                      </Avatar>
+                    }
+                    title={
+                      <a onClick={() => navigate(`/user/${item.user_id}`)}>
+                        {item.nickname || item.username}
+                      </a>
+                    }
+                    description={
+                      <span>
+                        {UPDATE_TYPE_LABELS[item.type] || item.type}
+                        {item.description ? ` - ${item.description}` : ''}
+                        <span style={{ marginLeft: 8, color: '#bbb', fontSize: 12 }}>
+                          {item.created_at ? new Date(item.created_at).toLocaleString() : ''}
+                        </span>
+                      </span>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          )}
+        </Spin>
+      ),
+    },
   ]
 
-  const firstChar = user?.username?.[0]?.toUpperCase() || '?'
+  const firstChar = ((user as any)?.nickname || user?.username)?.[0]?.toUpperCase() || '?'
+  const displayName = (user as any)?.nickname || user?.username || ''
   const roleLabel = user?.is_admin ? '管理员' : '普通用户'
   const roleColor = user?.is_admin ? 'red' : 'blue'
 
@@ -459,14 +696,69 @@ const Profile: React.FC = () => {
               </Col>
               <Col flex="auto">
                 <Descriptions column={{ xs: 1, sm: 2 }} size="middle">
+                  <Descriptions.Item label="昵称">
+                    {nicknameEditing ? (
+                      <Space>
+                        <Input
+                          size="small"
+                          value={nicknameValue}
+                          onChange={(e) => setNicknameValue(e.target.value)}
+                          onPressEnter={handleNicknameSave}
+                          style={{ width: 160 }}
+                          maxLength={20}
+                          placeholder="输入昵称"
+                        />
+                        <Button size="small" type="primary" loading={nicknameLoading} onClick={handleNicknameSave}>
+                          保存
+                        </Button>
+                        <Button size="small" onClick={handleNicknameCancel}>
+                          取消
+                        </Button>
+                      </Space>
+                    ) : (
+                      <Space>
+                        <span style={{ fontSize: 18, fontWeight: 600 }}>{displayName}</span>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<EditOutlined />}
+                          onClick={handleNicknameEdit}
+                        />
+                      </Space>
+                    )}
+                  </Descriptions.Item>
                   <Descriptions.Item label="用户名">
-                    <span style={{ fontSize: 18, fontWeight: 600 }}>{user?.username}</span>
+                    <span style={{ fontSize: 14, color: '#666' }}>@{user?.username}</span>
                   </Descriptions.Item>
                   <Descriptions.Item label="角色">
                     <Tag color={roleColor}>{roleLabel}</Tag>
                   </Descriptions.Item>
                   <Descriptions.Item label="邮箱">
                     {user?.email || '未设置'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="关注">
+                    <a
+                      onClick={() => {
+                        fetchFollowing()
+                        setFollowingModalOpen(true)
+                      }}
+                      style={{ fontWeight: 600, fontSize: 16 }}
+                    >
+                      <TeamOutlined style={{ marginRight: 4 }} />
+                      {followingCount}
+                    </a>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="粉丝">
+                    <a
+                      onClick={() => {
+                        fetchFollowers()
+                        setFollowersModalOpen(true)
+                      }}
+                      style={{ fontWeight: 600, fontSize: 16 }}
+                    >
+                      <UserOutlined style={{ marginRight: 4 }} />
+                      {followersCount}
+                    </a>
                   </Descriptions.Item>
                   <Descriptions.Item label="状态">
                     <Tag color={user?.is_active ? 'green' : 'red'}>
@@ -517,6 +809,46 @@ const Profile: React.FC = () => {
       <Card>
         <Tabs activeKey={activeTab} onChange={handleTabChange} items={tabItems} />
       </Card>
+
+      <Modal
+        title="我的关注"
+        open={followingModalOpen}
+        onCancel={() => setFollowingModalOpen(false)}
+        footer={null}
+        width={480}
+      >
+        <Spin spinning={followingLoading}>
+          {following.length === 0 && !followingLoading ? (
+            <Empty description="暂无关注" />
+          ) : (
+            <List
+              dataSource={following}
+              renderItem={renderFollowUserItem}
+              locale={{ emptyText: '暂无关注' }}
+            />
+          )}
+        </Spin>
+      </Modal>
+
+      <Modal
+        title="我的粉丝"
+        open={followersModalOpen}
+        onCancel={() => setFollowersModalOpen(false)}
+        footer={null}
+        width={480}
+      >
+        <Spin spinning={followersLoading}>
+          {followers.length === 0 && !followersLoading ? (
+            <Empty description="暂无粉丝" />
+          ) : (
+            <List
+              dataSource={followers}
+              renderItem={renderFollowUserItem}
+              locale={{ emptyText: '暂无粉丝' }}
+            />
+          )}
+        </Spin>
+      </Modal>
     </div>
   )
 }

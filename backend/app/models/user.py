@@ -12,6 +12,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(100), unique=True, index=True, nullable=False)
+    nickname = Column(String(50), nullable=True, comment="用户昵称")
     email = Column(String(255), unique=True, index=True, nullable=True)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True)
@@ -27,6 +28,7 @@ class User(Base):
         return {
             'id': self.id,
             'username': self.username,
+            'nickname': self.nickname,
             'email': self.email,
             'is_active': self.is_active,
             'is_admin': self.is_admin,

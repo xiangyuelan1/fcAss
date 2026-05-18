@@ -6,6 +6,7 @@ import { authApi } from '@/services/api';
 interface UserInfo {
   id: number;
   username: string;
+  nickname?: string;
   email: string | null;
   is_active: boolean;
   is_admin: boolean;
