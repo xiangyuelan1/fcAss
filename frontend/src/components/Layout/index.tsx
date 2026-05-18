@@ -344,7 +344,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
     )
   }
 
-  // 桌面端布局（保持原有设计）
+  // 桌面端布局
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider trigger={null} collapsible collapsed={collapsed} theme="light">
@@ -372,14 +372,15 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           onClick={({ key }) => handleMenuClick(key)}
         />
       </Sider>
-      <Layout>
+      <Layout style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <Header style={{
           padding: '0 24px',
           background: colorBgContainer,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          boxShadow: '0 1px 4px rgba(0,21,41,.08)'
+          boxShadow: '0 1px 4px rgba(0,21,41,.08)',
+          flexShrink: 0,
         }}>
           <Button
             type="text"
@@ -432,26 +433,28 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           style={{
             margin: '24px',
             padding: 24,
-            minHeight: 280,
             background: colorBgContainer,
             borderRadius: borderRadiusLG,
+            flex: 1,
+            overflow: 'auto',
           }}
         >
           {children}
         </Content>
+        {/* 免责声明 */}
+        <div style={{
+          background: '#fffbe6',
+          borderTop: '1px solid #ffe58f',
+          padding: '4px 24px',
+          fontSize: 11,
+          color: '#ad6800',
+          textAlign: 'center',
+          lineHeight: '18px',
+          flexShrink: 0,
+        }}>
+          ⚠️ 免责声明：本平台所有数据和分析结果仅供参考，不构成任何投资建议。所有预测基于日K线历史数据，过去的表现不代表未来收益。投资有风险，入市需谨慎。
+        </div>
       </Layout>
-      <div style={{
-        background: '#fffbe6',
-        borderTop: '1px solid #ffe58f',
-        padding: '4px 24px',
-        fontSize: 11,
-        color: '#ad6800',
-        textAlign: 'center',
-        lineHeight: '18px',
-        flexShrink: 0,
-      }}>
-        ⚠️ 免责声明：本平台所有数据和分析结果仅供参考，不构成任何投资建议。所有预测基于日K线历史数据，过去的表现不代表未来收益。投资有风险，入市需谨慎。
-      </div>
       <OnboardingGuide
         open={onboardingVisible}
         onClose={() => setOnboardingVisible(false)}
