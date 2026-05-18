@@ -82,6 +82,12 @@ export const dataApi = {
 
   ensureStockData: (code: string) =>
     api.post(`/data/stocks/${code}/ensure`),
+
+  searchStockPool: (q: string) =>
+    api.get('/data/stocks/search', { params: { q } }),
+
+  syncStockPool: () =>
+    api.post('/data/stocks/sync-pool'),
 };
 
 // 特征工程API
@@ -437,6 +443,16 @@ export const messageApi = {
 export const guideApi = {
   getState: () => api.get('/guide/state'),
   complete: () => api.post('/guide/complete'),
+};
+
+export const watchlistApi = {
+  getWatchlists: () => api.get('/watchlists'),
+  createWatchlist: (data: { name: string; description?: string }) => api.post('/watchlists', data),
+  updateWatchlist: (id: number, data: { name?: string; description?: string }) => api.put(`/watchlists/${id}`, data),
+  deleteWatchlist: (id: number) => api.delete(`/watchlists/${id}`),
+  addStock: (id: number, data: { stock_code: string; stock_name: string }) => api.post(`/watchlists/${id}/stocks`, data),
+  removeStock: (id: number, code: string) => api.delete(`/watchlists/${id}/stocks/${code}`),
+  getStocks: (id: number) => api.get(`/watchlists/${id}/stocks`),
 };
 
 export default api;

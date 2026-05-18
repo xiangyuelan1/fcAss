@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Layout, Menu, Button, Modal, theme, Dropdown, Avatar, Space } from 'antd'
+import { Layout, Menu, Button, Modal, theme, Dropdown, Avatar, Space, Badge } from 'antd'
 import {
   DashboardOutlined,
-  DatabaseOutlined,
   ToolOutlined,
   RobotOutlined,
   PlayCircleOutlined,
@@ -22,10 +21,12 @@ import {
   MailOutlined,
   CustomerServiceOutlined,
   QuestionCircleOutlined,
+  StarOutlined,
+  BellOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/store'
-import { authApi } from '@/services/api'
+import { authApi, messageApi } from '@/services/api'
 import OnboardingGuide from '@/components/OnboardingGuide'
 
 const { Header, Sider, Content } = Layout
@@ -40,6 +41,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const [onboardingVisible, setOnboardingVisible] = useState(false)
   const [disclaimerVisible, setDisclaimerVisible] = useState(false)
   const [onlineCount, setOnlineCount] = useState<number>(0)
+  const [unreadCount, setUnreadCount] = useState<number>(0)
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout } = useAuthStore()
@@ -72,7 +74,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   useEffect(() => {
   }, [location.pathname])
 
-  // 心跳上报与在线人数轮询
+  // 心跳上报与在线人数轮询、未读消息计数轮询
   useEffect(() => {
     const sendHeartbeat = async () => {
       try {
@@ -85,13 +87,22 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         setOnlineCount(res.online_count || 0)
       } catch {}
     }
+    const fetchUnreadCount = async () => {
+      try {
+        const res: any = await messageApi.getUnreadCount()
+        setUnreadCount(res.unread_count || 0)
+      } catch {}
+    }
     sendHeartbeat()
     fetchOnlineCount()
+    fetchUnreadCount()
     const heartbeatInterval = setInterval(sendHeartbeat, 120000)
     const countInterval = setInterval(fetchOnlineCount, 60000)
+    const unreadInterval = setInterval(fetchUnreadCount, 60000)
     return () => {
       clearInterval(heartbeatInterval)
       clearInterval(countInterval)
+      clearInterval(unreadInterval)
     }
   }, [])
 
@@ -114,16 +125,12 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: '我的工作台',
     },
     {
-      key: '/data',
-      icon: <DatabaseOutlined />,
-      label: '数据管理',
-    },
-    {
       key: 'model-group',
       icon: <RobotOutlined />,
       label: '模型管理',
       children: [
         { key: '/models', icon: <RobotOutlined />, label: '我的模型' },
+        { key: '/watchlist', icon: <StarOutlined />, label: '自选股' },
         { key: '/features', icon: <ToolOutlined />, label: '特征工程' },
       ],
     },
@@ -221,12 +228,22 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               {onlineCount}人在线
             </span>
           </div>
-          <Button
-            type="text"
-            icon={<MenuUnfoldOutlined />}
-            onClick={() => setCollapsed(false)}
-            style={{ fontSize: '18px' }}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Badge count={unreadCount} size="small" offset={[2, -2]}>
+              <Button
+                type="text"
+                icon={<BellOutlined style={{ fontSize: 18 }} />}
+                onClick={() => navigate('/contact')}
+                style={{ padding: '4px 8px' }}
+              />
+            </Badge>
+            <Button
+              type="text"
+              icon={<MenuUnfoldOutlined />}
+              onClick={() => setCollapsed(false)}
+              style={{ fontSize: '18px' }}
+            />
+          </div>
         </Header>
 
         {/* 主内容区域 */}
@@ -395,7 +412,16 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               {onlineCount} 人在线
             </span>
           </div>
-          <Dropdown
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <Badge count={unreadCount} size="small" offset={[2, -2]}>
+              <Button
+                type="text"
+                icon={<BellOutlined style={{ fontSize: 18 }} />}
+                onClick={() => navigate('/contact')}
+                style={{ padding: '4px 8px' }}
+              />
+            </Badge>
+            <Dropdown
             menu={{
               items: [
                 {
@@ -428,6 +454,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
               <span>{user?.username}</span>
             </Space>
           </Dropdown>
+          </div>
         </Header>
         <Content
           style={{

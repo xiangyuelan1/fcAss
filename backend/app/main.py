@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.config import settings
-from app.core.database import init_db, SessionLocal, Base
+from app.core.database import init_db, _migrate_db, SessionLocal, Base
 from app.core.logging import setup_logging
 from app.models.stock import Stock, StockPrice
 from app.models.user_model import UserModel
@@ -15,12 +15,13 @@ from app.models.training import TrainingTask, BacktestResult
 from app.models.payment import PaymentConfig, PaymentOrder
 from app.models.user_prefs import UserStockPrefs, UserModelPrefs
 from app.models.system_config import SystemConfig
+from app.models.watchlist import Watchlist, WatchlistItem
 from app.api import api_router
 from app.auth import get_password_hash
 
 
 def _ensure_default_admin():
-    """确保默认管理员账号存在（首次启动时自动创建）"""
+    """确保默认管理员账号存在且拥有管理员权限（首次启动时自动创建）"""
     db = SessionLocal()
     try:
         existing = db.query(User).filter(User.username == "admin").first()
@@ -35,6 +36,11 @@ def _ensure_default_admin():
             db.add(admin)
             db.commit()
             print("[OK] 默认管理员账号已创建: admin / admin123")
+        elif not existing.is_admin:
+            existing.is_admin = True
+            existing.is_active = True
+            db.commit()
+            print("[OK] 管理员账号权限已修复: is_admin=True")
         else:
             print("[OK] 管理员账号已存在")
     except Exception as e:
@@ -51,6 +57,7 @@ async def lifespan(app: FastAPI):
     print(f"[启动] {settings.APP_NAME} v{settings.APP_VERSION}")
     init_db()
     print("[OK] 数据库初始化完成")
+    _migrate_db()
     _ensure_default_admin()
 
     yield

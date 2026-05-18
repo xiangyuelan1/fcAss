@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Card,
@@ -7,6 +7,7 @@ import {
   Input,
   Select,
   Space,
+  Modal,
   message,
   Row,
   Col,
@@ -19,6 +20,9 @@ import {
   Tooltip,
   Divider,
   Typography,
+  Tabs,
+  List,
+  Popconfirm,
 } from 'antd'
 import {
   LeftOutlined,
@@ -39,8 +43,12 @@ import {
   FireOutlined,
   CopyOutlined,
   ThunderboltOutlined,
+  StarOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  FolderOutlined,
 } from '@ant-design/icons'
-import { modelApi, dataApi, featureApi } from '@/services/api'
+import { modelApi, dataApi, featureApi, watchlistApi } from '@/services/api'
 import { ModelType, Indicator, Stock, ModelTemplate } from '@/types'
 import dayjs from 'dayjs'
 
@@ -207,6 +215,44 @@ const CATEGORY_ICONS: Record<string, string> = {
   '成交量类': '📊',
 }
 
+/** 草稿持久化存储 key */
+const DRAFT_STORAGE_KEY = 'model_builder_draft'
+
+/** 草稿数据结构（日期已序列化为字符串，可直接 JSON 化） */
+interface ModelBuilderDraft {
+  name: string
+  description: string
+  selectedModelType: string | undefined
+  modelConfig: Record<string, any>
+  selectedIndicators: string[]
+  indicatorParams: Record<string, Record<string, any>>
+  target: string
+  stockCodes: string[]
+  dateRange: [string | null, string | null] | null
+  currentStep: number
+  savedAt: string
+}
+
+/** 将组件内的表单状态序列化为可 JSON 化的草稿数据（dayjs → 字符串） */
+const serializeDraft = (state: {
+  name: string
+  description: string
+  selectedModelType: string | undefined
+  modelConfig: Record<string, any>
+  selectedIndicators: string[]
+  indicatorParams: Record<string, Record<string, any>>
+  target: string
+  stockCodes: string[]
+  dateRange: [dayjs.Dayjs | null, dayjs.Dayjs | null] | null
+  currentStep: number
+}): ModelBuilderDraft => ({
+  ...state,
+  dateRange: state.dateRange
+    ? [state.dateRange[0]?.format('YYYY-MM-DD') ?? null, state.dateRange[1]?.format('YYYY-MM-DD') ?? null]
+    : null,
+  savedAt: new Date().toISOString(),
+})
+
 const ModelBuilder: React.FC = () => {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -232,17 +278,88 @@ const ModelBuilder: React.FC = () => {
   const [stockCodes, setStockCodes] = useState<string[]>([])
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
 
+  // 自选表与股票池搜索相关状态
+  const [watchlists, setWatchlists] = useState<any[]>([])
+  const [activeWatchlistId, setActiveWatchlistId] = useState<number | null>(null)
+  const [watchlistStocks, setWatchlistStocks] = useState<any[]>([])
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [searchResults, setSearchResults] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
+  const [manageModalVisible, setManageModalVisible] = useState(false)
+
+  // 草稿保存相关状态
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [draftModalVisible, setDraftModalVisible] = useState(false)
+  const [draftData, setDraftData] = useState<ModelBuilderDraft | null>(null)
+  // 用 ref 追踪最新表单状态，供卸载保存和 beforeunload 时读取
+  const formStateRef = useRef({ name, description, selectedModelType, modelConfig, selectedIndicators, indicatorParams, target, stockCodes, dateRange, currentStep })
+
   useEffect(() => {
     fetchModelTypes()
     fetchTypeStats()
     fetchIndicators()
     fetchStocks()
+    fetchWatchlists()
     if (id) {
       fetchModelDetail()
       setShowTemplatePanel(false)
     } else {
       fetchTemplates()
     }
+  }, [id])
+
+  // 同步表单状态到 ref，供卸载保存和 beforeunload 读取最新值
+  useEffect(() => {
+    formStateRef.current = { name, description, selectedModelType, modelConfig, selectedIndicators, indicatorParams, target, stockCodes, dateRange, currentStep }
+  }, [name, description, selectedModelType, modelConfig, selectedIndicators, indicatorParams, target, stockCodes, dateRange, currentStep])
+
+  // 将草稿写入 localStorage（仅新建模式，有实际内容时才保存，内容清空则移除）
+  const saveDraft = useCallback(() => {
+    if (id) return
+    const draft = serializeDraft(formStateRef.current)
+    const hasContent = draft.name || draft.description || draft.selectedModelType || draft.selectedIndicators.length > 0 || draft.stockCodes.length > 0
+    if (hasContent) {
+      try { localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft)) } catch { /* localStorage 满或不可用 */ }
+    } else {
+      localStorage.removeItem(DRAFT_STORAGE_KEY)
+    }
+  }, [id])
+
+  // 清除草稿
+  const clearDraft = useCallback(() => { localStorage.removeItem(DRAFT_STORAGE_KEY) }, [])
+
+  // 表单状态变化时防抖自动保存草稿（500ms）
+  useEffect(() => {
+    if (id) return
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current)
+    draftTimerRef.current = setTimeout(saveDraft, 500)
+    return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current) }
+  }, [name, description, selectedModelType, modelConfig, selectedIndicators, indicatorParams, target, stockCodes, dateRange, currentStep, id, saveDraft])
+
+  // 组件卸载时立即保存草稿
+  useEffect(() => {
+    return () => { saveDraft() }
+  }, [saveDraft])
+
+  // 浏览器关闭或刷新时保存草稿
+  useEffect(() => {
+    if (id) return
+    const handleBeforeUnload = () => { saveDraft() }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => { window.removeEventListener('beforeunload', handleBeforeUnload) }
+  }, [id, saveDraft])
+
+  // 挂载时检测未完成草稿，提示用户选择恢复或丢弃
+  useEffect(() => {
+    if (id) return
+    try {
+      const raw = localStorage.getItem(DRAFT_STORAGE_KEY)
+      if (raw) {
+        const draft = JSON.parse(raw) as ModelBuilderDraft
+        setDraftData(draft)
+        setDraftModalVisible(true)
+      }
+    } catch { /* 草稿数据损坏，忽略 */ }
   }, [id])
 
   const fetchModelTypes = async () => {
@@ -256,6 +373,43 @@ const ModelBuilder: React.FC = () => {
   }
   const fetchStocks = async () => {
     try { const data: any = await dataApi.getStocks(); setStocks(data) } catch { message.error('获取股票列表失败') }
+  }
+  const fetchWatchlists = async () => {
+    try { const data: any = await watchlistApi.getWatchlists(); setWatchlists(data) } catch {}
+  }
+  const handleWatchlistSelect = async (watchlistId: number) => {
+    setActiveWatchlistId(watchlistId)
+    try {
+      const data: any = await watchlistApi.getStocks(watchlistId)
+      setWatchlistStocks(data)
+    } catch {
+      message.error('获取自选表股票失败')
+    }
+  }
+  const handleStockSearch = async (keyword: string) => {
+    setSearchKeyword(keyword)
+    if (!keyword.trim()) {
+      setSearchResults([])
+      return
+    }
+    setSearching(true)
+    try {
+      const data: any = await dataApi.searchStockPool(keyword.trim())
+      setSearchResults(data)
+    } catch {
+      setSearchResults([])
+    } finally {
+      setSearching(false)
+    }
+  }
+  const addStockToSelection = (code: string, name: string) => {
+    if (!stockCodes.includes(code)) {
+      setStockCodes([...stockCodes, code])
+      message.success(`已添加 ${name}(${code})`)
+    }
+  }
+  const removeStockFromSelection = (code: string) => {
+    setStockCodes(stockCodes.filter((c) => c !== code))
   }
   const fetchTemplates = async () => {
     setTemplatesLoading(true)
@@ -369,6 +523,7 @@ const ModelBuilder: React.FC = () => {
         await modelApi.createModel(config)
       }
       message.success(id ? '模型更新成功' : '模型创建成功')
+      if (!id) clearDraft()
       navigate('/models')
     } catch (error: any) {
       console.error('保存失败:', error)
@@ -415,6 +570,36 @@ const ModelBuilder: React.FC = () => {
     } catch (error: any) {
       message.warning(typeof error?.response?.data?.detail === 'string' ? error.response.data.detail : 'AI优化暂不可用，请先配置AI接口')
     } finally { setAiOptimizing(false) }
+  }
+
+  // 恢复草稿数据到表单状态
+  const handleRestoreDraft = () => {
+    if (!draftData) return
+    setName(draftData.name)
+    setDescription(draftData.description)
+    setSelectedModelType(draftData.selectedModelType)
+    setModelConfig(draftData.modelConfig)
+    setSelectedIndicators(draftData.selectedIndicators)
+    setIndicatorParams(draftData.indicatorParams)
+    setTarget(draftData.target)
+    setStockCodes(draftData.stockCodes)
+    setDateRange(
+      draftData.dateRange
+        ? [draftData.dateRange[0] ? dayjs(draftData.dateRange[0]) : null, draftData.dateRange[1] ? dayjs(draftData.dateRange[1]) : null]
+        : null
+    )
+    setCurrentStep(draftData.currentStep)
+    setShowTemplatePanel(false)
+    setDraftModalVisible(false)
+    setDraftData(null)
+    message.success('已恢复上次编辑的草稿')
+  }
+
+  // 丢弃草稿，从零开始
+  const handleDiscardDraft = () => {
+    clearDraft()
+    setDraftModalVisible(false)
+    setDraftData(null)
   }
 
   const getIndicatorKey = (indicator: any): string => indicator.key || indicator.name.toLowerCase()
@@ -720,7 +905,7 @@ const ModelBuilder: React.FC = () => {
       title: '选股票',
       icon: stepStatus[3] ? <CheckCircleFilled style={{ color: '#52c41a' }} /> : <DatabaseOutlined />,
       content: (
-        <div style={{ maxWidth: 600, margin: '0 auto' }}>
+        <div style={{ maxWidth: 700, margin: '0 auto' }}>
           <div style={{ marginBottom: 24 }}>
             <label style={{ fontWeight: 600, fontSize: 16, display: 'block', marginBottom: 8 }}>
               预测什么 <span style={{ color: '#f5222d' }}>*</span>
@@ -741,38 +926,245 @@ const ModelBuilder: React.FC = () => {
           </div>
 
           <div style={{ marginBottom: 24 }}>
-            <label style={{ fontWeight: 600, fontSize: 16, display: 'block', marginBottom: 8 }}>
-              用哪只股票的数据训练 <span style={{ color: '#f5222d' }}>*</span>
-              <Tooltip title="选的股票越多，模型学到的规律越通用。预测时也可以预测其他股票。">
-                <InfoCircleOutlined style={{ marginLeft: 8, color: '#1890ff', cursor: 'help' }} />
-              </Tooltip>
-            </label>
-            <Select
-              mode="multiple"
-              value={stockCodes}
-              onChange={setStockCodes}
-              placeholder="选择训练股票（可多选）"
-              showSearch
-              optionFilterProp="label"
-              style={{ width: '100%' }}
-              size="large"
-            >
-              {stocks.map((stock: any) => (
-                <Select.Option key={stock.code} value={stock.code} label={`${stock.code} ${stock.name}`}>
-                  {stock.code} - {stock.name}
-                </Select.Option>
-              ))}
-            </Select>
-            {stocks.length === 0 && (
-              <Alert message="暂无股票数据，请先到数据管理页面获取" type="warning" showIcon style={{ marginTop: 8 }} />
-            )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <label style={{ fontWeight: 600, fontSize: 16 }}>
+                选择训练股票 <span style={{ color: '#f5222d' }}>*</span>
+                <Tooltip title="选的股票越多，模型学到的规律越通用。">
+                  <InfoCircleOutlined style={{ marginLeft: 8, color: '#1890ff', cursor: 'help' }} />
+                </Tooltip>
+              </label>
+              <Button
+                size="small"
+                icon={<SettingOutlined />}
+                onClick={() => setManageModalVisible(true)}
+              >
+                管理自选表
+              </Button>
+            </div>
+
+            <Tabs
+              size="small"
+              items={[
+                {
+                  key: 'search',
+                  label: '🔍 搜索添加',
+                  children: (
+                    <div>
+                      <Input.Search
+                        placeholder="输入股票代码或名称搜索"
+                        value={searchKeyword}
+                        onChange={(e) => handleStockSearch(e.target.value)}
+                        onSearch={handleStockSearch}
+                        loading={searching}
+                        allowClear
+                        style={{ marginBottom: 12 }}
+                      />
+                      {searchResults.length > 0 && (
+                        <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                          {searchResults.map((stock: any) => (
+                            <div
+                              key={stock.code}
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '8px 12px',
+                                cursor: 'pointer',
+                                background: stockCodes.includes(stock.code) ? '#f6ffed' : 'transparent',
+                                borderBottom: '1px solid #f5f5f5',
+                              }}
+                              onClick={() => addStockToSelection(stock.code, stock.name)}
+                            >
+                              <span>
+                                <strong>{stock.code}</strong> - {stock.name}
+                                {stock.exchange && <Tag style={{ marginLeft: 8 }} color="blue">{stock.exchange}</Tag>}
+                              </span>
+                              {stockCodes.includes(stock.code) ? (
+                                <Tag color="green">已选</Tag>
+                              ) : (
+                                <Button size="small" type="link">添加</Button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {searchKeyword && searchResults.length === 0 && !searching && (
+                        <div style={{ textAlign: 'center', color: '#999', padding: 16 }}>
+                          未找到匹配的股票
+                        </div>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: 'watchlist',
+                  label: `⭐ 自选表${watchlists.length > 0 ? `(${watchlists.length})` : ''}`,
+                  children: (
+                    <div>
+                      {watchlists.length === 0 ? (
+                        <div style={{ textAlign: 'center', color: '#999', padding: 24 }}>
+                          <StarOutlined style={{ fontSize: 32, marginBottom: 8, display: 'block' }} />
+                          暂无自选表，请先创建
+                          <Button
+                            type="link"
+                            onClick={() => setManageModalVisible(true)}
+                          >
+                            创建自选表
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <Select
+                            placeholder="选择自选表"
+                            value={activeWatchlistId}
+                            onChange={handleWatchlistSelect}
+                            style={{ width: '100%', marginBottom: 12 }}
+                          >
+                            {watchlists.map((wl: any) => (
+                              <Select.Option key={wl.id} value={wl.id}>
+                                {wl.name} ({wl.stock_count}只)
+                              </Select.Option>
+                            ))}
+                          </Select>
+                          {activeWatchlistId && watchlistStocks.length > 0 && (
+                            <div style={{ marginBottom: 8 }}>
+                              <Button
+                                size="small"
+                                type="primary"
+                                onClick={() => {
+                                  const newCodes = watchlistStocks
+                                    .filter((s: any) => !stockCodes.includes(s.stock_code))
+                                    .map((s: any) => s.stock_code)
+                                  if (newCodes.length > 0) {
+                                    setStockCodes([...stockCodes, ...newCodes])
+                                    message.success(`已添加 ${newCodes.length} 只股票`)
+                                  } else {
+                                    message.info('自选表中所有股票已选')
+                                  }
+                                }}
+                              >
+                                全部添加到训练
+                              </Button>
+                            </div>
+                          )}
+                          {activeWatchlistId && (
+                            <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                              {watchlistStocks.length > 0 ? watchlistStocks.map((item: any) => (
+                                <div
+                                  key={item.stock_code}
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    padding: '8px 12px',
+                                    background: stockCodes.includes(item.stock_code) ? '#f6ffed' : 'transparent',
+                                    borderBottom: '1px solid #f5f5f5',
+                                  }}
+                                >
+                                  <span>
+                                    <strong>{item.stock_code}</strong> - {item.stock_name}
+                                  </span>
+                                  {stockCodes.includes(item.stock_code) ? (
+                                    <Tag color="green">已选</Tag>
+                                  ) : (
+                                    <Button size="small" type="link" onClick={() => addStockToSelection(item.stock_code, item.stock_name)}>
+                                      添加
+                                    </Button>
+                                  )}
+                                </div>
+                              )) : (
+                                <div style={{ textAlign: 'center', color: '#999', padding: 16 }}>
+                                  该自选表暂无股票
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: 'data',
+                  label: '📊 有数据股票',
+                  children: (
+                    <Select
+                      mode="multiple"
+                      value={stockCodes}
+                      onChange={setStockCodes}
+                      placeholder="从已有数据股票中选择"
+                      showSearch
+                      optionFilterProp="label"
+                      style={{ width: '100%' }}
+                      size="large"
+                    >
+                      {stocks.map((stock: any) => (
+                        <Select.Option key={stock.code} value={stock.code} label={`${stock.code} ${stock.name}`}>
+                          {stock.code} - {stock.name}
+                        </Select.Option>
+                      ))}
+                    </Select>
+                  ),
+                },
+              ]}
+            />
           </div>
+
+          {/* 已选股票列表 */}
+          {stockCodes.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ fontWeight: 600, fontSize: 14, display: 'block', marginBottom: 8 }}>
+                已选 {stockCodes.length} 只股票
+              </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {stockCodes.map((code) => {
+                  const stockInfo = stocks.find((s: any) => s.code === code)
+                  const watchlistInfo = watchlistStocks.find((s: any) => s.stock_code === code)
+                  const displayName = stockInfo?.name || watchlistInfo?.stock_name || code
+                  return (
+                    <Tag
+                      key={code}
+                      closable
+                      onClose={() => removeStockFromSelection(code)}
+                      color="blue"
+                      style={{ fontSize: 13, padding: '4px 8px' }}
+                    >
+                      {code} {displayName}
+                    </Tag>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           <div>
             <label style={{ fontWeight: 600, fontSize: 16, display: 'block', marginBottom: 8 }}>
               训练日期范围
               <span style={{ fontWeight: 400, fontSize: 13, color: '#999', marginLeft: 8 }}>建议1~3年</span>
             </label>
+            <Space style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+              {[
+                { label: '近三个月', value: () => [dayjs().subtract(3, 'month'), dayjs()] as [dayjs.Dayjs, dayjs.Dayjs] },
+                { label: '近半年', value: () => [dayjs().subtract(6, 'month'), dayjs()] as [dayjs.Dayjs, dayjs.Dayjs] },
+                { label: '近五年', value: () => [dayjs().subtract(5, 'year'), dayjs()] as [dayjs.Dayjs, dayjs.Dayjs] },
+                { label: '近十年', value: () => [dayjs().subtract(10, 'year'), dayjs()] as [dayjs.Dayjs, dayjs.Dayjs] },
+                { label: '所有数据', value: () => null },
+              ].map((item) => (
+                <Button
+                  key={item.label}
+                  size="small"
+                  type={
+                    (item.label === '所有数据' && dateRange === null) ||
+                    (item.label !== '所有数据' && dateRange !== null && dateRange[0] != null && dateRange[0].isSame((item.value() as [dayjs.Dayjs, dayjs.Dayjs])[0], 'day'))
+                      ? 'primary'
+                      : 'default'
+                  }
+                  onClick={() => setDateRange(item.value())}
+                >
+                  {item.label}
+                </Button>
+              ))}
+            </Space>
             <RangePicker
               value={dateRange}
               onChange={(dates) => setDateRange(dates as any)}
@@ -785,6 +1177,12 @@ const ModelBuilder: React.FC = () => {
               ]}
             />
           </div>
+
+          {/* 管理自选表弹窗 */}
+          <WatchlistManageModal
+            visible={manageModalVisible}
+            onClose={() => { setManageModalVisible(false); fetchWatchlists() }}
+          />
         </div>
       ),
     },
@@ -792,6 +1190,18 @@ const ModelBuilder: React.FC = () => {
 
   return (
     <div>
+      <Modal
+        open={draftModalVisible}
+        title="发现未完成的草稿"
+        closable={false}
+        maskClosable={false}
+        footer={[
+          <Button key="discard" onClick={handleDiscardDraft}>清空重新开始</Button>,
+          <Button key="restore" type="primary" onClick={handleRestoreDraft}>继续编辑</Button>,
+        ]}
+      >
+        <p>检测到您上次有未完成的模型配置（保存于 {draftData?.savedAt ? dayjs(draftData.savedAt).format('YYYY-MM-DD HH:mm') : '未知时间'}），是否继续编辑？</p>
+      </Modal>
       <h1 className="page-title">{id ? '编辑模型' : '创建模型'}</h1>
       <p className="page-description">{id ? '修改模型配置后保存即可' : '4步创建你的预测模型：起名 → 选算法 → 选指标 → 选股票。每步都可以调整，选模板更省心！'}</p>
 
@@ -1091,3 +1501,221 @@ const MLPLayerEditor: React.FC<{ value: Record<string, any>; onChange: (c: Recor
 }
 
 export default ModelBuilder
+
+/** 自选表管理弹窗 - 在模型创建流程中快速管理自选表 */
+const WatchlistManageModal: React.FC<{
+  visible: boolean
+  onClose: () => void
+}> = ({ visible, onClose }) => {
+  const [watchlists, setWatchlists] = useState<any[]>([])
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editDesc, setEditDesc] = useState('')
+  const [createName, setCreateName] = useState('')
+  const [createDesc, setCreateDesc] = useState('')
+  const [detailId, setDetailId] = useState<number | null>(null)
+  const [detailStocks, setDetailStocks] = useState<any[]>([])
+  const [addSearchKeyword, setAddSearchKeyword] = useState('')
+  const [addSearchResults, setAddSearchResults] = useState<any[]>([])
+  const [addSearching, setAddSearching] = useState(false)
+
+  useEffect(() => {
+    if (visible) fetchWatchlists()
+  }, [visible])
+
+  const fetchWatchlists = async () => {
+    try {
+      const data: any = await watchlistApi.getWatchlists()
+      setWatchlists(data)
+    } catch {}
+  }
+
+  const handleCreate = async () => {
+    if (!createName.trim()) { message.error('请输入自选表名称'); return }
+    try {
+      await watchlistApi.createWatchlist({ name: createName.trim(), description: createDesc.trim() || undefined })
+      message.success('自选表创建成功')
+      setCreateName('')
+      setCreateDesc('')
+      fetchWatchlists()
+    } catch { message.error('创建失败') }
+  }
+
+  const handleUpdate = async (id: number) => {
+    try {
+      await watchlistApi.updateWatchlist(id, { name: editName.trim(), description: editDesc.trim() || undefined })
+      message.success('更新成功')
+      setEditingId(null)
+      fetchWatchlists()
+    } catch { message.error('更新失败') }
+  }
+
+  const handleDelete = async (id: number) => {
+    try {
+      await watchlistApi.deleteWatchlist(id)
+      message.success('已删除')
+      if (detailId === id) setDetailId(null)
+      fetchWatchlists()
+    } catch { message.error('删除失败') }
+  }
+
+  const handleViewDetail = async (id: number) => {
+    setDetailId(id)
+    try {
+      const data: any = await watchlistApi.getStocks(id)
+      setDetailStocks(data)
+    } catch { message.error('获取股票列表失败') }
+  }
+
+  const handleRemoveStock = async (watchlistId: number, stockCode: string) => {
+    try {
+      await watchlistApi.removeStock(watchlistId, stockCode)
+      message.success('已移除')
+      handleViewDetail(watchlistId)
+    } catch { message.error('移除失败') }
+  }
+
+  const handleAddSearch = async (keyword: string) => {
+    setAddSearchKeyword(keyword)
+    if (!keyword.trim()) { setAddSearchResults([]); return }
+    setAddSearching(true)
+    try {
+      const data: any = await dataApi.searchStockPool(keyword.trim())
+      setAddSearchResults(data)
+    } catch { setAddSearchResults([]) } finally { setAddSearching(false) }
+  }
+
+  const handleAddStock = async (watchlistId: number, code: string, name: string) => {
+    try {
+      await watchlistApi.addStock(watchlistId, { stock_code: code, stock_name: name })
+      message.success(`已添加 ${name}`)
+      handleViewDetail(watchlistId)
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      if (detail) message.warning(detail)
+      else message.error('添加失败')
+    }
+  }
+
+  return (
+    <Modal
+      title="管理自选表"
+      open={visible}
+      onCancel={onClose}
+      footer={null}
+      width={700}
+      destroyOnClose
+    >
+      {/* 创建新自选表 */}
+      <Card size="small" style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>
+          <PlusOutlined style={{ marginRight: 4 }} /> 创建新自选表
+        </div>
+        <Space.Compact style={{ width: '100%' }}>
+          <Input
+            placeholder="自选表名称"
+            value={createName}
+            onChange={(e) => setCreateName(e.target.value)}
+            style={{ width: '40%' }}
+          />
+          <Input
+            placeholder="描述（可选）"
+            value={createDesc}
+            onChange={(e) => setCreateDesc(e.target.value)}
+            style={{ width: '45%' }}
+          />
+          <Button type="primary" onClick={handleCreate}>创建</Button>
+        </Space.Compact>
+      </Card>
+
+      {/* 自选表列表 */}
+      {detailId ? (
+        <div>
+          <Button
+            type="link"
+            onClick={() => { setDetailId(null); setDetailStocks([]) }}
+            style={{ marginBottom: 12, padding: 0 }}
+          >
+            ← 返回列表
+          </Button>
+          <Card size="small" title="搜索添加股票" style={{ marginBottom: 12 }}>
+            <Input.Search
+              placeholder="输入股票代码或名称搜索"
+              value={addSearchKeyword}
+              onChange={(e) => handleAddSearch(e.target.value)}
+              onSearch={handleAddSearch}
+              loading={addSearching}
+              allowClear
+            />
+            {addSearchResults.length > 0 && (
+              <div style={{ maxHeight: 150, overflowY: 'auto', marginTop: 8, border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                {addSearchResults.map((stock: any) => (
+                  <div
+                    key={stock.code}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', borderBottom: '1px solid #f5f5f5' }}
+                  >
+                    <span><strong>{stock.code}</strong> - {stock.name}</span>
+                    <Button size="small" type="link" onClick={() => handleAddStock(detailId, stock.code, stock.name)}>添加</Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+          <Card size="small" title={`股票列表 (${detailStocks.length})`}>
+            {detailStocks.length === 0 ? (
+              <div style={{ textAlign: 'center', color: '#999', padding: 16 }}>暂无股票</div>
+            ) : (
+              <List
+                size="small"
+                dataSource={detailStocks}
+                renderItem={(item: any) => (
+                  <List.Item
+                    actions={[
+                      <Popconfirm title="确定移除？" onConfirm={() => handleRemoveStock(detailId, item.stock_code)}>
+                        <Button size="small" danger icon={<DeleteOutlined />}>移除</Button>
+                      </Popconfirm>,
+                    ]}
+                  >
+                    <span><strong>{item.stock_code}</strong> - {item.stock_name}</span>
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
+        </div>
+      ) : (
+        <List
+          dataSource={watchlists}
+          locale={{ emptyText: '暂无自选表' }}
+          renderItem={(wl: any) => (
+            <List.Item
+              actions={[
+                <Button size="small" type="link" onClick={() => handleViewDetail(wl.id)}>查看</Button>,
+                editingId === wl.id ? (
+                  <Button size="small" type="primary" onClick={() => handleUpdate(wl.id)}>保存</Button>
+                ) : (
+                  <Button size="small" type="link" icon={<EditOutlined />} onClick={() => { setEditingId(wl.id); setEditName(wl.name); setEditDesc(wl.description || '') }}>编辑</Button>
+                ),
+                <Popconfirm title="确定删除？删除后不可恢复" onConfirm={() => handleDelete(wl.id)}>
+                  <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm>,
+              ]}
+            >
+              {editingId === wl.id ? (
+                <div style={{ width: '100%' }}>
+                  <Input size="small" value={editName} onChange={(e) => setEditName(e.target.value)} style={{ marginBottom: 4 }} />
+                  <Input size="small" value={editDesc} onChange={(e) => setEditDesc(e.target.value)} placeholder="描述" />
+                </div>
+              ) : (
+                <List.Item.Meta
+                  title={<span><FolderOutlined style={{ marginRight: 8 }} />{wl.name}</span>}
+                  description={`${wl.description || '无描述'} · ${wl.stock_count}只股票`}
+                />
+              )}
+            </List.Item>
+          )}
+        />
+      )}
+    </Modal>
+  )
+}

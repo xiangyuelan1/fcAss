@@ -490,6 +490,83 @@ async def check_stale_data(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/stocks/search")
+async def search_stock_pool(
+    q: str = Query(..., min_length=1, description="搜索关键词（代码或名称）"),
+    limit: int = Query(20, ge=1, le=100, description="返回条数"),
+    db: Session = Depends(get_db),
+):
+    """搜索A股股票池（按代码或名称模糊搜索，只查 stocks 表）"""
+    pattern = f"%{q}%"
+    stocks = (
+        db.query(Stock)
+        .filter((Stock.code.like(pattern)) | (Stock.name.like(pattern)))
+        .limit(limit)
+        .all()
+    )
+    return [s.to_dict() for s in stocks]
+
+
+@router.post("/stocks/sync-pool")
+async def sync_stock_pool(
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """同步A股股票名称列表（从 akshare 获取所有A股代码和名称，只更新 stocks 表）"""
+    try:
+        import akshare as ak
+        import pandas as pd
+
+        df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
+        df_sz = ak.stock_info_sz_name_code(indicator="A股列表")
+
+        records = []
+        for _, row in df_sh.iterrows():
+            code = str(row.get("证券代码", "")).zfill(6)
+            name = str(row.get("证券简称", ""))
+            if code and name:
+                records.append({"code": f"sh{code}", "name": name, "exchange": "SH"})
+
+        for _, row in df_sz.iterrows():
+            code = str(row.get("A股代码", "")).zfill(6)
+            name = str(row.get("A股简称", ""))
+            if code and name:
+                records.append({"code": f"sz{code}", "name": name, "exchange": "SZ"})
+
+        if not records:
+            return {"success": False, "message": "未获取到股票数据，akshare可能暂不可用", "synced_count": 0}
+
+        existing_map = {}
+        for stock in db.query(Stock).all():
+            existing_map[stock.code] = stock
+
+        new_count = 0
+        update_count = 0
+        for rec in records:
+            existing = existing_map.get(rec["code"])
+            if existing:
+                if existing.name != rec["name"]:
+                    existing.name = rec["name"]
+                    update_count += 1
+            else:
+                db.add(Stock(code=rec["code"], name=rec["name"], exchange=rec["exchange"]))
+                new_count += 1
+
+        db.commit()
+        return {
+            "success": True,
+            "message": f"同步完成：新增 {new_count} 只，更新 {update_count} 只，总计 {len(records)} 只",
+            "synced_count": len(records),
+            "new_count": new_count,
+            "update_count": update_count,
+        }
+    except ImportError:
+        raise HTTPException(status_code=500, detail="akshare 库未安装，请执行 pip install akshare")
+    except Exception as e:
+        logger.exception("同步股票池失败")
+        raise HTTPException(status_code=500, detail=f"同步股票池失败: {str(e)}")
+
+
 @router.post("/batch-sync")
 async def batch_sync_stocks(
     current_user: UserModel = Depends(get_current_active_user),

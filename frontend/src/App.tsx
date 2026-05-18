@@ -15,6 +15,7 @@ import PaymentConfig from './pages/PaymentConfig'
 import AdminUsers from './pages/AdminUsers'
 import AdminConfig from './pages/AdminConfig'
 import LoginPage from './pages/Login'
+import WatchlistPage from './pages/Watchlist'
 import { useAuthStore } from './store'
 
 const Community = React.lazy(() => import('@/pages/Community'))
@@ -75,6 +76,7 @@ const App: React.FC = () => {
             <Route path="/models" element={<ModelList />} />
             <Route path="/models/build" element={<ModelBuilder />} />
             <Route path="/models/build/:id" element={<ModelBuilder />} />
+            <Route path="/watchlist" element={<WatchlistPage />} />
             <Route path="/training" element={<TrainingTasks />} />
             <Route path="/backtest" element={<Navigate to="/training" replace />} />
             <Route path="/prediction" element={<Prediction />} />
