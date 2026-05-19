@@ -84,6 +84,8 @@ export interface UserModel {
   is_pinned?: boolean;
   is_favorited?: boolean;
   is_published?: boolean;
+  auto_retrain_daily?: boolean;
+  auto_predict_pool_daily?: boolean;
 }
 
 export interface ModelType {
@@ -397,4 +399,35 @@ export interface FollowingUpdate {
   description: string;
   created_at: string;
   target_id?: number;
+}
+
+export interface AutoPredictPoolItem {
+  id: number;
+  user_id: number;
+  stock_code: string;
+  stock_name: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface PredictionShareItem {
+  id: number;
+  user_id: number;
+  task_id: number | null;
+  model_id: number | null;
+  model_name: string | null;
+  model_type: string | null;
+  stock_code: string;
+  stock_name: string | null;
+  target_type: string | null;
+  direction: string | null;
+  prediction_value: number | null;
+  confidence: number | null;
+  predicted_change_pct: number | null;
+  prediction_data: Record<string, any> | null;
+  is_published: boolean;
+  likes_count: number;
+  is_liked?: boolean;
+  author?: { id: number; username: string; nickname?: string };
+  created_at: string;
 }

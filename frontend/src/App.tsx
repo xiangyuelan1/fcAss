@@ -6,18 +6,14 @@ import PWAInstallPrompt from './components/PWAInstallPrompt'
 import PWAUpdatePrompt from './components/PWAUpdatePrompt'
 import Dashboard from './pages/Dashboard'
 import DataManagement from './pages/DataManagement'
-import FeatureEngineering from './pages/FeatureEngineering'
 import ModelList from './pages/ModelList'
 import ModelBuilder from './pages/ModelBuilder'
-import TrainingTasks from './pages/TrainingTasks'
-import Prediction from './pages/Prediction'
+import TrainingPredict from './pages/TrainingPredict'
 import PaymentConfig from './pages/PaymentConfig'
 import AdminUsers from './pages/AdminUsers'
 import AdminConfig from './pages/AdminConfig'
 import LoginPage from './pages/Login'
-import BacktestResults from './pages/BacktestResults'
 import WatchlistPage from './pages/Watchlist'
-import StockPoolPage from './pages/StockPool'
 import { useAuthStore } from './store'
 
 const Community = React.lazy(() => import('@/pages/Community'))
@@ -27,7 +23,6 @@ const CommunityModelDetail = React.lazy(() => import('@/pages/CommunityModelDeta
 const Profile = React.lazy(() => import('@/pages/Profile'))
 const ContactUs = React.lazy(() => import('@/pages/ContactUs'))
 const AdminMessages = React.lazy(() => import('@/pages/AdminMessages'))
-const DailyGuessPage = React.lazy(() => import('@/pages/DailyGuessPage'))
 const UserProfile = React.lazy(() => import('@/pages/UserProfile'))
 
 const LazyFallback = () => (
@@ -76,21 +71,16 @@ const App: React.FC = () => {
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/data" element={<DataManagement />} />
-            <Route path="/features" element={<FeatureEngineering />} />
             <Route path="/models" element={<ModelList />} />
             <Route path="/models/build" element={<ModelBuilder />} />
             <Route path="/models/build/:id" element={<ModelBuilder />} />
             <Route path="/watchlist" element={<WatchlistPage />} />
-            <Route path="/stock-pool" element={<StockPoolPage />} />
-            <Route path="/training" element={<TrainingTasks />} />
-            <Route path="/backtest" element={<BacktestResults />} />
-            <Route path="/prediction" element={<Prediction />} />
+            <Route path="/train-predict" element={<TrainingPredict />} />
             <Route path="/payment-config" element={<PaymentConfig />} />
             <Route path="/community" element={<Suspense fallback={<LazyFallback />}><Community /></Suspense>} />
             <Route path="/community/pk" element={<Suspense fallback={<LazyFallback />}><PKArena /></Suspense>} />
             <Route path="/community/leaderboard" element={<Suspense fallback={<LazyFallback />}><Leaderboard /></Suspense>} />
             <Route path="/community/model/:id" element={<Suspense fallback={<LazyFallback />}><CommunityModelDetail /></Suspense>} />
-            <Route path="/community/daily-guess" element={<Suspense fallback={<LazyFallback />}><DailyGuessPage /></Suspense>} />
             <Route path="/user/:id" element={<Suspense fallback={<LazyFallback />}><UserProfile /></Suspense>} />
             <Route path="/profile" element={<Suspense fallback={<LazyFallback />}><Profile /></Suspense>} />
             <Route path="/contact" element={<Suspense fallback={<LazyFallback />}><ContactUs /></Suspense>} />

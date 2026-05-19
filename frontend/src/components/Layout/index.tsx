@@ -2,9 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Layout, Menu, Button, Modal, theme, Dropdown, Avatar, Space, Badge } from 'antd'
 import {
   DashboardOutlined,
-  ToolOutlined,
   RobotOutlined,
-  PlayCircleOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   AppstoreOutlined,
@@ -16,16 +14,12 @@ import {
   SettingOutlined,
   CrownOutlined,
   GlobalOutlined,
-  TrophyOutlined,
   ProfileOutlined,
   MailOutlined,
   CustomerServiceOutlined,
   QuestionCircleOutlined,
   StarOutlined,
   BellOutlined,
-  BulbOutlined,
-  StockOutlined,
-  HeartOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/store'
@@ -114,21 +108,14 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   const menuItems = [
     {
-      key: 'community-group',
-      icon: <GlobalOutlined />,
-      label: '社区',
-      children: [
-        { key: '/community', icon: <GlobalOutlined />, label: '模型广场' },
-        { key: '/community/daily-guess', icon: <BulbOutlined />, label: '每日一猜' },
-        { key: '/community/pk', icon: <TrophyOutlined />, label: 'PK竞技' },
-        { key: '/community/leaderboard', icon: <TrophyOutlined />, label: '排行榜' },
-        { key: '/profile?tab=following-updates', icon: <HeartOutlined />, label: '关注动态' },
-      ],
-    },
-    {
       key: '/',
       icon: <DashboardOutlined />,
       label: '我的工作台',
+    },
+    {
+      key: '/community',
+      icon: <GlobalOutlined />,
+      label: '社区',
     },
     {
       key: 'model-group',
@@ -136,20 +123,13 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: '模型管理',
       children: [
         { key: '/models', icon: <RobotOutlined />, label: '我的模型' },
-        { key: '/stock-pool', icon: <StockOutlined />, label: '股票池' },
         { key: '/watchlist', icon: <StarOutlined />, label: '自选股' },
-        { key: '/features', icon: <ToolOutlined />, label: '特征工程' },
       ],
     },
     {
-      key: '/training',
-      icon: <PlayCircleOutlined />,
-      label: '训练与回测',
-    },
-    {
-      key: '/prediction',
+      key: '/train-predict',
       icon: <ThunderboltOutlined />,
-      label: '智能预测',
+      label: '训练与预测',
     },
     {
       key: '/contact',
@@ -198,8 +178,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
     { key: '/community', icon: <GlobalOutlined />, label: '社区' },
     { key: '/', icon: <DashboardOutlined />, label: '工作台' },
     { key: '/models', icon: <RobotOutlined />, label: '模型' },
-    { key: '/prediction', icon: <ThunderboltOutlined />, label: '预测' },
-    { key: '/training', icon: <PlayCircleOutlined />, label: '训练回测' },
+    { key: '/train-predict', icon: <ThunderboltOutlined />, label: '训练预测' },
+    { key: '/watchlist', icon: <StarOutlined />, label: '自选股' },
   ]
 
   const handleMenuClick = (key: string) => {

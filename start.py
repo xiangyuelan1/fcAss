@@ -72,8 +72,19 @@ def install_backend_deps():
             print("[OK] 后端依赖已安装")
             return True
         except subprocess.CalledProcessError as e:
-            print(f"[FAIL] 后端依赖安装失败: {e}")
-            return False
+            print(f"[WARN] 部分后端依赖安装失败，尝试安装核心依赖...")
+            # 降级：至少确保 akshare 和 baostock 可用
+            for pkg in ["akshare", "baostock"]:
+                try:
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "install", pkg],
+                        capture_output=True,
+                        check=True,
+                    )
+                    print(f"[OK] {pkg} 已安装")
+                except subprocess.CalledProcessError:
+                    print(f"[WARN] {pkg} 安装失败，股票池同步将使用降级方案")
+            return True
     return True
 
 

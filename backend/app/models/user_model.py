@@ -1,7 +1,7 @@
 """
 用户模型相关数据模型
 """
-from sqlalchemy import Column, Integer, String, DateTime, Text, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Boolean
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 from datetime import datetime
@@ -34,6 +34,10 @@ class UserModel(Base):
     
     # 状态
     status = Column(String(20), default="draft", comment="状态: draft/trained/deployed")
+
+    # 自动化配置
+    auto_retrain_daily = Column(Boolean, default=False, comment="每日自动重新训练")
+    auto_predict_pool_daily = Column(Boolean, default=False, comment="每日自动对预测池预测")
     
     # 时间戳
     created_at = Column(DateTime, default=datetime.now)
@@ -60,6 +64,8 @@ class UserModel(Base):
             "stock_codes": self.stock_codes,
             "train_date_range": self.train_date_range,
             "status": self.status,
+            "auto_retrain_daily": self.auto_retrain_daily if self.auto_retrain_daily is not None else False,
+            "auto_predict_pool_daily": self.auto_predict_pool_daily if self.auto_predict_pool_daily is not None else False,
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
             "updated_at": self.updated_at.strftime("%Y-%m-%d %H:%M:%S") if self.updated_at else None,
         }

@@ -63,6 +63,8 @@ class UpdateModelRequest(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = None
     config: Optional[ModelConfigRequest] = None
+    auto_retrain_daily: Optional[bool] = Field(None, description="每日自动重新训练")
+    auto_predict_pool_daily: Optional[bool] = Field(None, description="每日自动对预测池预测")
 
 
 # ============================================================
@@ -554,6 +556,10 @@ async def update_model(
             'stock_codes': request.config.stock_codes,
             'train_date_range': request.config.train_date_range
         })
+    if request.auto_retrain_daily is not None:
+        update_data['auto_retrain_daily'] = request.auto_retrain_daily
+    if request.auto_predict_pool_daily is not None:
+        update_data['auto_predict_pool_daily'] = request.auto_predict_pool_daily
     model = service.update_model(model_id, **update_data)
     return _map_model_response(model)
 

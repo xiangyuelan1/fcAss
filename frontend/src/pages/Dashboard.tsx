@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Row, Col, Card, Statistic, List, Tag, Button, Steps, Alert, message, Radio, Avatar, Space, Divider } from 'antd'
+import { Row, Col, Card, Statistic, List, Tag, Button, Steps, Alert, message, Radio, Avatar, Space, Divider, Collapse, Switch } from 'antd'
 import {
   DatabaseOutlined,
   RobotOutlined,
@@ -23,8 +23,9 @@ import {
   BulbOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { dataApi, modelApi, trainingApi, backtestApi, pointsApi, communityApi } from '@/services/api'
-import { UserModel, TrainingTask, DailyChallenge } from '@/types'
+import { dataApi, modelApi, trainingApi, backtestApi, pointsApi, communityApi, predictionApi, authApi } from '@/services/api'
+import { UserModel, TrainingTask, DailyChallenge, PredictionShareItem } from '@/types'
+import { useAuthStore } from '@/store'
 import OnboardingGuide, { isOnboardingCompleted } from '@/components/OnboardingGuide'
 import DailyGuess from '@/components/DailyGuess'
 import MascotBull from '@/components/MascotBull'
@@ -68,6 +69,7 @@ interface LeaderboardItem {
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate()
+  const { user, setUser } = useAuthStore()
   const [stats, setStats] = useState({
     stockCount: 0,
     modelCount: 0,
@@ -87,10 +89,12 @@ const Dashboard: React.FC = () => {
   const [hotSignals, setHotSignals] = useState<CommunitySignal[]>([])
   const [popularModels, setPopularModels] = useState<CommunityModelItem[]>([])
   const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([])
+  const [myPredictions, setMyPredictions] = useState<PredictionShareItem[]>([])
 
   useEffect(() => {
     fetchDashboardData()
     fetchCommunityData()
+    fetchMyPredictions()
   }, [])
 
   useEffect(() => {
@@ -114,6 +118,14 @@ const Dashboard: React.FC = () => {
     try {
       const lbRes: any = await pointsApi.getLeaderboard({ limit: 5 })
       setLeaderboard(lbRes.leaderboard || lbRes || [])
+    } catch {}
+  }
+
+  const fetchMyPredictions = async () => {
+    try {
+      const res: any = await predictionApi.getMyPredictions()
+      const items = (res as any)?.items || (Array.isArray(res) ? res : [])
+      setMyPredictions(items)
     } catch {}
   }
 
@@ -230,9 +242,9 @@ const Dashboard: React.FC = () => {
   const stepActions: Record<number, { path: string; text: string }> = {
     0: { path: '/data', text: '获取股票数据' },
     1: { path: '/models/build', text: '创建模型' },
-    2: { path: '/training', text: '训练模型' },
-    3: { path: '/backtest', text: '执行回测' },
-    4: { path: '/prediction', text: '开始预测' },
+    2: { path: '/train-predict', text: '训练模型' },
+    3: { path: '/train-predict', text: '执行回测' },
+    4: { path: '/train-predict', text: '开始预测' },
   }
 
   return (
@@ -537,6 +549,111 @@ const Dashboard: React.FC = () => {
         我的工作台
       </Divider>
 
+      {/* ===== 我的预测结果 ===== */}
+      <Divider orientation="left" style={{ fontSize: 15, color: '#666' }}>
+        我的预测结果
+      </Divider>
+
+      <Alert
+        message="预测结果会自动展示在工作台，同一只股票的预测结果会归在一起"
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+      />
+
+      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 13, color: '#666' }}>每日自动清空预测结果</span>
+        <Switch
+          checked={user?.auto_clear_predictions_daily !== false}
+          onChange={async (checked) => {
+            try {
+              await authApi.updateSettings({ auto_clear_predictions_daily: checked })
+              setUser({ ...user!, auto_clear_predictions_daily: checked })
+              message.success(checked ? '已开启每日自动清空' : '已关闭每日自动清空')
+            } catch {
+              message.error('更新设置失败')
+            }
+          }}
+        />
+      </div>
+
+      {myPredictions.length > 0 ? (
+        <Collapse
+          size="small"
+          style={{ marginBottom: 20 }}
+          items={Object.entries(
+            myPredictions.reduce((acc, pred) => {
+              const key = pred.stock_code
+              if (!acc[key]) acc[key] = []
+              acc[key].push(pred)
+              return acc
+            }, {} as Record<string, PredictionShareItem[]>)
+          ).map(([code, preds]) => {
+            const latest = preds[0]
+            const dirInfo = getDirectionInfo(latest.direction || 'flat')
+            return {
+              key: code,
+              label: (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Tag color="blue">{code}</Tag>
+                  <span>{latest.stock_name || code}</span>
+                  <Tag color={dirInfo.color}>{dirInfo.icon} {dirInfo.label}</Tag>
+                  <span style={{ fontSize: 12, color: '#999' }}>
+                    置信度 {Math.round((latest.confidence || 0) * 100)}%
+                  </span>
+                  <span style={{ fontSize: 12, color: '#999' }}>
+                    {latest.created_at?.slice(0, 16).replace('T', ' ')}
+                  </span>
+                </div>
+              ),
+              children: (
+                <List
+                  size="small"
+                  dataSource={preds}
+                  renderItem={(pred) => {
+                    const predDirInfo = getDirectionInfo(pred.direction || 'flat')
+                    return (
+                      <List.Item>
+                        <List.Item.Meta
+                          title={
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <Tag color={predDirInfo.color}>{predDirInfo.icon} {predDirInfo.label}</Tag>
+                              <span style={{ fontSize: 12 }}>
+                                置信度 {Math.round((pred.confidence || 0) * 100)}%
+                              </span>
+                              {pred.prediction_value != null && (
+                                <span style={{ fontSize: 12, color: '#666' }}>
+                                  预测值: {pred.prediction_value.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                          }
+                          description={
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: 12, color: '#999' }}>
+                                {pred.model_name || '未知模型'}
+                              </span>
+                              <span style={{ fontSize: 12, color: '#999' }}>
+                                {pred.created_at?.slice(0, 16).replace('T', ' ')}
+                              </span>
+                            </div>
+                          }
+                        />
+                      </List.Item>
+                    )
+                  }}
+                />
+              ),
+            }
+          })}
+        />
+      ) : (
+        <div style={{ textAlign: 'center', padding: '32px 0', color: '#999', marginBottom: 20 }}>
+          <ThunderboltOutlined style={{ fontSize: 32, marginBottom: 8, display: 'block' }} />
+          暂无预测结果，完成训练后即可进行预测
+        </div>
+      )}
+
       {/* 引导式流程进度 */}
       <Card style={{ marginBottom: 20 }} size="small">
         <Steps
@@ -583,7 +700,7 @@ const Dashboard: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/training')} size="small">
+          <Card hoverable onClick={() => navigate('/train-predict')} size="small">
             <Statistic
               title="训练任务"
               value={stats.taskCount}
@@ -593,7 +710,7 @@ const Dashboard: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/prediction')} size="small">
+          <Card hoverable onClick={() => navigate('/train-predict')} size="small">
             <Statistic
               title="可预测模型"
               value={stats.completedTaskCount}
@@ -618,9 +735,9 @@ const Dashboard: React.FC = () => {
                 <List.Item
                   actions={[
                     model.status === 'trained' ? (
-                      <Button type="link" size="small" onClick={() => navigate('/prediction')}>预测</Button>
+                      <Button type="link" size="small" onClick={() => navigate('/train-predict')}>预测</Button>
                     ) : model.status === 'draft' ? (
-                      <Button type="link" size="small" onClick={() => navigate('/training')}>训练</Button>
+                      <Button type="link" size="small" onClick={() => navigate('/train-predict')}>训练</Button>
                     ) : null,
                     <Button type="link" size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>,
                   ]}
@@ -644,7 +761,7 @@ const Dashboard: React.FC = () => {
           <Card
             title="最近任务"
             size="small"
-            extra={<Button type="link" size="small" onClick={() => navigate('/training')}>查看全部</Button>}
+            extra={<Button type="link" size="small" onClick={() => navigate('/train-predict')}>查看全部</Button>}
           >
             <List
               dataSource={recentTasks}
@@ -653,9 +770,9 @@ const Dashboard: React.FC = () => {
                 <List.Item
                   actions={[
                     task.status === 'completed' ? (
-                      <Button type="link" size="small" onClick={() => navigate(`/prediction?task_id=${task.id}`)}>预测</Button>
+                      <Button type="link" size="small" onClick={() => navigate('/train-predict')}>预测</Button>
                     ) : null,
-                    <Button type="link" size="small" onClick={() => navigate('/training')}>详情</Button>,
+                    <Button type="link" size="small" onClick={() => navigate('/train-predict')}>详情</Button>,
                   ]}
                 >
                   <List.Item.Meta

@@ -103,7 +103,7 @@ const StockPool: React.FC = () => {
       if (industry) params.industry = industry
       if (exchange) params.exchange = exchange
       const data: any = await dataApi.getStockPool(params)
-      setStocks(data.items || data.data || [])
+      setStocks(data.stocks || [])
       setTotal(data.total || 0)
     } catch {
       message.error('获取股票池失败')

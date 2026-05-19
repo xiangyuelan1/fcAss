@@ -22,6 +22,7 @@ class User(Base):
     last_login_at = Column(DateTime(timezone=True), comment="最后登录时间")
     last_login_ip = Column(String(45), comment="最后登录IP地址")
     last_heartbeat = Column(DateTime(timezone=True), comment="最后心跳时间")
+    auto_clear_predictions_daily = Column(Boolean, default=True, comment="每日自动清空预测结果")
 
     def to_dict(self):
         """转换为字典"""
@@ -37,4 +38,5 @@ class User(Base):
             'last_login_at': self.last_login_at.isoformat() if self.last_login_at else None,
             'last_login_ip': self.last_login_ip,
             'last_heartbeat': self.last_heartbeat.isoformat() if self.last_heartbeat else None,
+            'auto_clear_predictions_daily': self.auto_clear_predictions_daily if self.auto_clear_predictions_daily is not None else True,
         }

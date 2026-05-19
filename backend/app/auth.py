@@ -33,6 +33,7 @@ class UserResponse(BaseModel):
     email: Optional[str] = None
     is_active: bool = True
     is_admin: bool = False
+    auto_clear_predictions_daily: Optional[bool] = True
 
     model_config = {"from_attributes": True}
 

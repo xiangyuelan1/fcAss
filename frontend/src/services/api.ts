@@ -97,6 +97,15 @@ export const dataApi = {
 
   getRealtimeQuote: (code: string) =>
     api.get(`/data/stocks/${code}/realtime`),
+
+  getAutoPredictPool: () =>
+    api.get('/data/auto-predict-pool'),
+
+  addToAutoPredictPool: (stockCode: string, stockName?: string) =>
+    api.post('/data/auto-predict-pool/add', null, { params: { stock_code: stockCode, stock_name: stockName } }),
+
+  removeFromAutoPredictPool: (stockCode: string) =>
+    api.delete(`/data/auto-predict-pool/${stockCode}`),
 };
 
 // 特征工程API
@@ -297,6 +306,24 @@ export const predictionApi = {
   // 获取可预测股票列表
   getPredictableStocks: (taskId: number) =>
     api.get(`/prediction/tasks/${taskId}/predictable-stocks`),
+
+  sharePrediction: (data: {
+    task_id: number;
+    stock_code: string;
+    prediction_data: Record<string, any>;
+  }) => api.post('/prediction/predict/share', data),
+
+  getMyPredictions: () =>
+    api.get('/prediction/predictions/my'),
+
+  getCommunityPredictions: (params?: { page?: number; page_size?: number }) =>
+    api.get('/prediction/predictions/community', { params }),
+
+  likePrediction: (shareId: number) =>
+    api.post(`/prediction/predictions/${shareId}/like`),
+
+  deletePrediction: (shareId: number) =>
+    api.delete(`/prediction/predictions/${shareId}`),
 };
 
 // 认证API
@@ -330,6 +357,10 @@ export const authApi = {
   // 获取当前在线人数
   getOnlineCount: () =>
     api.get('/auth/online-count'),
+
+  // 更新用户设置
+  updateSettings: (data: Record<string, any>) =>
+    api.put('/auth/settings', data),
 };
 
 // 支付API

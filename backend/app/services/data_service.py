@@ -372,39 +372,47 @@ class DataService:
     def sync_stock_pool(self) -> int:
         """同步A股股票池（仅代码和名称，不获取价格数据）
 
-        从 akshare 获取沪深A股列表，增量更新 stocks 表。
-        新增不存在的股票记录，更新已有股票的名称。
+        优先从 akshare 获取沪深A股列表；若 akshare 不可用则降级到 baostock。
+        增量更新 stocks 表：新增不存在的股票记录，更新已有股票的名称。
 
         Returns:
             新增的股票数量
         """
-        import akshare as ak
+        import logging
+        logger = logging.getLogger(__name__)
 
         all_stocks = []
 
-        # 沪市主板
+        # 优先尝试 akshare
         try:
-            df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
-            for _, row in df_sh.iterrows():
-                code = str(row.get('证券代码', '')).zfill(6)
-                name = str(row.get('证券简称', ''))
-                if code and name and not name.startswith('N'):
-                    all_stocks.append({'code': code, 'name': name, 'exchange': 'SH'})
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"获取沪市股票列表失败: {e}")
+            import akshare as ak
 
-        # 深市
-        try:
-            df_sz = ak.stock_info_sz_name_code(indicator="A股列表")
-            for _, row in df_sz.iterrows():
-                code = str(row.get('A股代码', '')).zfill(6)
-                name = str(row.get('A股简称', ''))
-                if code and name and not name.startswith('N'):
-                    all_stocks.append({'code': code, 'name': name, 'exchange': 'SZ'})
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"获取深市股票列表失败: {e}")
+            # 沪市主板
+            try:
+                df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
+                for _, row in df_sh.iterrows():
+                    code = str(row.get('证券代码', '')).zfill(6)
+                    name = str(row.get('证券简称', ''))
+                    if code and name and not name.startswith('N'):
+                        all_stocks.append({'code': code, 'name': name, 'exchange': 'SH'})
+            except Exception as e:
+                logger.warning(f"获取沪市股票列表失败: {e}")
+
+            # 深市
+            try:
+                df_sz = ak.stock_info_sz_name_code(indicator="A股列表")
+                for _, row in df_sz.iterrows():
+                    code = str(row.get('A股代码', '')).zfill(6)
+                    name = str(row.get('A股简称', ''))
+                    if code and name and not name.startswith('N'):
+                        all_stocks.append({'code': code, 'name': name, 'exchange': 'SZ'})
+            except Exception as e:
+                logger.warning(f"获取深市股票列表失败: {e}")
+
+        except ImportError:
+            # akshare 不可用，降级到 baostock
+            logger.info("akshare 未安装，使用 baostock 降级方案同步股票池")
+            all_stocks = self._sync_stock_pool_via_baostock()
 
         if not all_stocks:
             return 0
@@ -426,3 +434,50 @@ class DataService:
 
         self.db.commit()
         return new_count
+
+    @staticmethod
+    def _sync_stock_pool_via_baostock() -> list:
+        """通过 baostock 获取A股股票列表（akshare 不可用时的降级方案）
+
+        使用 baostock 的 query_stock_basic 接口查询所有股票基本信息，
+        根据股票代码数字前缀判断交易所：6开头=SH，0/3开头=SZ，8/4开头=BJ。
+
+        Returns:
+            股票信息列表 [{'code': '600519', 'name': '贵州茅台', 'exchange': 'SH'}, ...]
+        """
+        import baostock as bs
+        import logging
+        logger = logging.getLogger(__name__)
+
+        all_stocks = []
+        bs.login()
+
+        try:
+            rs = bs.query_stock_basic()
+            while rs.error_code == '0' and rs.next():
+                row = rs.get_row_data()
+                # baostock 返回的 code 格式为 "sh.600000"，提取纯数字部分
+                raw_code = row[0] if len(row) > 0 else ''
+                code_name = row[1] if len(row) > 1 else ''
+                pure_code = raw_code.split('.')[-1] if '.' in raw_code else raw_code
+
+                if not pure_code or not code_name:
+                    continue
+
+                # 根据代码数字前缀判断交易所
+                if pure_code.startswith('6'):
+                    exchange = 'SH'
+                elif pure_code.startswith('0') or pure_code.startswith('3'):
+                    exchange = 'SZ'
+                elif pure_code.startswith('8') or pure_code.startswith('4'):
+                    exchange = 'BJ'
+                else:
+                    continue
+
+                all_stocks.append({'code': pure_code, 'name': code_name, 'exchange': exchange})
+        except Exception as e:
+            logger.warning(f"baostock 降级方案获取股票列表失败: {e}")
+        finally:
+            bs.logout()
+
+        return all_stocks

@@ -8,6 +8,8 @@ from app.models.message import Message
 from app.models.watchlist import Watchlist, WatchlistItem
 from app.models.daily_guess import DailyGuessStock, DailyGuessVote
 from app.models.follow import Follow
+from app.models.auto_predict_pool import AutoPredictPoolItem
+from app.models.prediction_share import PredictionShare
 
 __all__ = [
     "Stock",
@@ -32,4 +34,6 @@ __all__ = [
     "DailyGuessStock",
     "DailyGuessVote",
     "Follow",
+    "AutoPredictPoolItem",
+    "PredictionShare",
 ]

@@ -46,6 +46,7 @@ class UpdateUserRequest(BaseModel):
     password: Optional[str] = None
     new_password: Optional[str] = None
     nickname: Optional[str] = None
+    auto_clear_predictions_daily: Optional[bool] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -139,6 +140,9 @@ async def update_user(
 
     if update_data.nickname is not None:
         current_user.nickname = update_data.nickname
+
+    if update_data.auto_clear_predictions_daily is not None:
+        current_user.auto_clear_predictions_daily = update_data.auto_clear_predictions_daily
 
     db.commit()
     db.refresh(current_user)

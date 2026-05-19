@@ -10,6 +10,7 @@ interface UserInfo {
   email: string | null;
   is_active: boolean;
   is_admin: boolean;
+  auto_clear_predictions_daily?: boolean;
 }
 
 interface AuthState {

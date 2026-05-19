@@ -19,6 +19,7 @@ from app.auth import get_current_active_user
 from app.models.user import User as UserModel
 from app.models.user_prefs import UserStockPrefs
 from app.models.stock import Stock, StockPrice
+from app.models.auto_predict_pool import AutoPredictPoolItem
 from app.utils.data_fetcher import DataFetcher
 
 logger = logging.getLogger(__name__)
@@ -564,7 +565,7 @@ async def sync_stock_pool(
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """同步A股股票名称列表（从 akshare 获取所有A股代码和名称，只更新 stocks 表）"""
+    """同步A股股票名称列表（优先 akshare，降级 baostock）"""
     try:
         import akshare as ak
         import pandas as pd
@@ -585,38 +586,89 @@ async def sync_stock_pool(
             if code and name:
                 records.append({"code": f"sz{code}", "name": name, "exchange": "SZ"})
 
-        if not records:
-            return {"success": False, "message": "未获取到股票数据，akshare可能暂不可用", "synced_count": 0}
-
-        existing_map = {}
-        for stock in db.query(Stock).all():
-            existing_map[stock.code] = stock
-
-        new_count = 0
-        update_count = 0
-        for rec in records:
-            existing = existing_map.get(rec["code"])
-            if existing:
-                if existing.name != rec["name"]:
-                    existing.name = rec["name"]
-                    update_count += 1
-            else:
-                db.add(Stock(code=rec["code"], name=rec["name"], exchange=rec["exchange"]))
-                new_count += 1
-
-        db.commit()
-        return {
-            "success": True,
-            "message": f"同步完成：新增 {new_count} 只，更新 {update_count} 只，总计 {len(records)} 只",
-            "synced_count": len(records),
-            "new_count": new_count,
-            "update_count": update_count,
-        }
     except ImportError:
-        raise HTTPException(status_code=500, detail="akshare 库未安装，请执行 pip install akshare")
+        # akshare 未安装，使用 baostock 降级方案
+        records = _sync_stock_pool_via_baostock()
+
     except Exception as e:
-        logger.exception("同步股票池失败")
-        raise HTTPException(status_code=500, detail=f"同步股票池失败: {str(e)}")
+        logger.exception("akshare 同步股票池失败，尝试 baostock 降级")
+        records = _sync_stock_pool_via_baostock()
+
+    if not records:
+        return {"success": False, "message": "未获取到股票数据，请检查网络连接或安装 akshare", "synced_count": 0}
+
+    existing_map = {}
+    for stock in db.query(Stock).all():
+        existing_map[stock.code] = stock
+
+    new_count = 0
+    update_count = 0
+    for rec in records:
+        existing = existing_map.get(rec["code"])
+        if existing:
+            if existing.name != rec["name"]:
+                existing.name = rec["name"]
+                update_count += 1
+        else:
+            db.add(Stock(code=rec["code"], name=rec["name"], exchange=rec["exchange"]))
+            new_count += 1
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"同步完成：新增 {new_count} 只，更新 {update_count} 只，总计 {len(records)} 只",
+        "synced_count": len(records),
+        "new_count": new_count,
+        "update_count": update_count,
+    }
+
+
+def _sync_stock_pool_via_baostock() -> list:
+    """通过 baostock 获取A股股票列表（akshare 不可用时的降级方案）
+
+    使用 baostock 的 query_stock_basic 接口查询所有股票基本信息，
+    根据股票代码数字前缀判断交易所：6开头=SH，0/3开头=SZ，8/4开头=BJ。
+
+    Returns:
+        股票信息列表 [{'code': 'sh600519', 'name': '贵州茅台', 'exchange': 'SH'}, ...]
+    """
+    import baostock as bs
+
+    records = []
+    bs.login()
+
+    try:
+        rs = bs.query_stock_basic()
+        while rs.error_code == '0' and rs.next():
+            row = rs.get_row_data()
+            raw_code = row[0] if len(row) > 0 else ''
+            code_name = row[1] if len(row) > 1 else ''
+
+            if not raw_code or not code_name:
+                continue
+
+            # baostock 返回格式为 "sh.600000"，直接作为 code 使用（与现有格式一致）
+            pure_code = raw_code.split('.')[-1] if '.' in raw_code else raw_code
+
+            if pure_code.startswith('6'):
+                exchange = 'SH'
+                prefix = 'sh'
+            elif pure_code.startswith('0') or pure_code.startswith('3'):
+                exchange = 'SZ'
+                prefix = 'sz'
+            elif pure_code.startswith('8') or pure_code.startswith('4'):
+                exchange = 'BJ'
+                prefix = 'bj'
+            else:
+                continue
+
+            records.append({"code": f"{prefix}{pure_code}", "name": code_name, "exchange": exchange})
+    except Exception as e:
+        logger.warning(f"baostock 降级方案获取股票列表失败: {e}")
+    finally:
+        bs.logout()
+
+    return records
 
 
 @router.post("/batch-sync")
@@ -710,3 +762,73 @@ async def update_all_stocks(
         'total': len(stocks_with_data),
         'results': results,
     }
+
+
+# ============================================================
+# 自动预测池
+# ============================================================
+
+AUTO_PREDICT_POOL_LIMIT = 10
+
+
+@router.get("/auto-predict-pool")
+async def get_auto_predict_pool(
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """获取当前用户的自动预测池"""
+    items = db.query(AutoPredictPoolItem).filter(
+        AutoPredictPoolItem.user_id == current_user.id
+    ).order_by(AutoPredictPoolItem.sort_order).all()
+    return {"items": [item.to_dict() for item in items]}
+
+
+@router.post("/auto-predict-pool/add")
+async def add_to_auto_predict_pool(
+    stock_code: str,
+    stock_name: Optional[str] = None,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """添加股票到自动预测池（上限10只）"""
+    count = db.query(AutoPredictPoolItem).filter(
+        AutoPredictPoolItem.user_id == current_user.id
+    ).count()
+    if count >= AUTO_PREDICT_POOL_LIMIT:
+        raise HTTPException(status_code=400, detail="自动预测池已满，最多10只股票")
+    existing = db.query(AutoPredictPoolItem).filter(
+        AutoPredictPoolItem.user_id == current_user.id,
+        AutoPredictPoolItem.stock_code == stock_code
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="该股票已在自动预测池中")
+    if not stock_name:
+        stock = db.query(Stock).filter(Stock.code == stock_code).first()
+        stock_name = stock.name if stock else stock_code
+    item = AutoPredictPoolItem(
+        user_id=current_user.id,
+        stock_code=stock_code,
+        stock_name=stock_name,
+        sort_order=count
+    )
+    db.add(item)
+    db.commit()
+    return {"success": True, "message": f"已添加 {stock_name} 到自动预测池"}
+
+
+@router.delete("/auto-predict-pool/{stock_code}")
+async def remove_from_auto_predict_pool(
+    stock_code: str,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """从自动预测池移除股票"""
+    item = db.query(AutoPredictPoolItem).filter(
+        AutoPredictPoolItem.user_id == current_user.id,
+        AutoPredictPoolItem.stock_code == stock_code
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="该股票不在自动预测池中")
+    db.delete(item)
+    db.commit()
+    return {"success": True, "message": f"已从自动预测池移除 {stock_code}"}

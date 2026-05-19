@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import {
   Card,
   Row,
@@ -11,22 +11,23 @@ import {
   List,
   Spin,
   Empty,
+  Tabs,
   message,
 } from 'antd'
 import {
   HeartOutlined,
   CopyOutlined,
-  GlobalOutlined,
   SearchOutlined,
-  ThunderboltOutlined,
   TrophyOutlined,
   StarOutlined,
   RiseOutlined,
   FallOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { communityApi, pointsApi } from '@/services/api'
-import { CommunityModel, CommunitySignal, UserPoints } from '@/types'
+import { communityApi, pointsApi, predictionApi, socialApi } from '@/services/api'
+import { CommunityModel, PredictionShareItem, UserPoints, FollowingUpdate } from '@/types'
+import DailyGuess from '@/components/DailyGuess'
 
 const MODEL_TYPE_COLORS: Record<string, string> = {
   lstm: 'blue',
@@ -53,294 +54,497 @@ const TYPE_OPTIONS = [
   { label: 'MLP', value: 'mlp' },
 ]
 
+const PREDICTION_SORT_OPTIONS = [
+  { label: '最新发布', value: 'newest' },
+  { label: '最多点赞', value: 'likes' },
+  { label: '最高置信度', value: 'confidence' },
+]
+
 const Community: React.FC = () => {
   const navigate = useNavigate()
   const [models, setModels] = useState<CommunityModel[]>([])
-  const [signals, setSignals] = useState<CommunitySignal[]>([])
+  const [predictions, setPredictions] = useState<PredictionShareItem[]>([])
   const [leaderboard, setLeaderboard] = useState<UserPoints[]>([])
-  const [loading, setLoading] = useState(false)
+  const [followingUpdates, setFollowingUpdates] = useState<FollowingUpdate[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [predictionsLoading, setPredictionsLoading] = useState(false)
   const [searchText, setSearchText] = useState('')
   const [modelType, setModelType] = useState('')
   const [sortBy, setSortBy] = useState('newest')
+  const [predictionSortBy, setPredictionSortBy] = useState('newest')
+  const [activeTab, setActiveTab] = useState('models')
 
   useEffect(() => {
     fetchModels()
-    fetchSignals()
+    fetchPredictions()
     fetchLeaderboard()
+    fetchFollowingUpdates()
   }, [])
 
-  const fetchModels = async () => {
-    setLoading(true)
+  const fetchModels = useCallback(async () => {
+    setModelsLoading(true)
     try {
-      const params: any = {}
+      const params: Record<string, any> = {}
       if (searchText) params.search = searchText
       if (modelType) params.model_type = modelType
       if (sortBy) params.sort_by = sortBy
       const data = await communityApi.getModels(params)
       const items = (data as any)?.items || (Array.isArray(data) ? data : [])
       setModels(items)
-    } catch (error) {
+    } catch {
       message.error('获取模型列表失败')
     } finally {
-      setLoading(false)
+      setModelsLoading(false)
     }
-  }
+  }, [searchText, modelType, sortBy])
 
-  const fetchSignals = async () => {
+  const fetchPredictions = useCallback(async () => {
+    setPredictionsLoading(true)
     try {
-      const data = await communityApi.getSignals({ page_size: 10 })
-      setSignals((data as any)?.items || (Array.isArray(data) ? data : []))
-    } catch (error) {
-      message.error('获取信号列表失败')
+      const params: Record<string, any> = {}
+      if (predictionSortBy) params.sort_by = predictionSortBy
+      const data = await predictionApi.getCommunityPredictions(params)
+      const items = (data as any)?.items || (Array.isArray(data) ? data : [])
+      setPredictions(items)
+    } catch {
+      message.error('获取预测分享失败')
+    } finally {
+      setPredictionsLoading(false)
     }
-  }
+  }, [predictionSortBy])
 
   const fetchLeaderboard = async () => {
     try {
       const data = await pointsApi.getLeaderboard({ page_size: 10 })
       setLeaderboard((data as any)?.items || (Array.isArray(data) ? data : []))
-    } catch (error) {
+    } catch {
       message.error('获取排行榜失败')
     }
   }
 
-  const handleSearch = () => {
-    fetchModels()
+  const fetchFollowingUpdates = async () => {
+    try {
+      const data = await socialApi.getFollowingUpdates()
+      const items = (data as any)?.items || (Array.isArray(data) ? data : [])
+      setFollowingUpdates(items.slice(0, 3))
+    } catch {
+      setFollowingUpdates([])
+    }
   }
 
-  const handleLike = async (id: number) => {
+  useEffect(() => {
+    if (activeTab === 'models') {
+      fetchModels()
+    }
+  }, [searchText, modelType, sortBy, activeTab, fetchModels])
+
+  useEffect(() => {
+    if (activeTab === 'predictions') {
+      fetchPredictions()
+    }
+  }, [predictionSortBy, activeTab, fetchPredictions])
+
+  const handleLikeModel = async (id: number) => {
     try {
       await communityApi.likeModel(id)
       fetchModels()
-    } catch (error) {
+    } catch {
       message.error('操作失败')
     }
   }
 
-  const handleClone = async (id: number) => {
+  const handleCloneModel = async (id: number) => {
     try {
       await communityApi.cloneModel(id)
       message.success('克隆成功，已添加到我的模型')
       fetchModels()
-    } catch (error) {
+    } catch {
       message.error('克隆失败')
     }
   }
 
-  const getDirectionIcon = (direction: string) => {
-    if (direction === 'up') return <RiseOutlined style={{ color: '#f5222d' }} />
-    if (direction === 'down') return <FallOutlined style={{ color: '#52c41a' }} />
-    return <GlobalOutlined />
+  const handleLikePrediction = async (id: number) => {
+    try {
+      await predictionApi.likePrediction(id)
+      fetchPredictions()
+    } catch {
+      message.error('操作失败')
+    }
   }
 
-  const getDirectionText = (direction: string) => {
+  const getDirectionColor = (direction: string) => {
+    if (direction === 'up') return 'red'
+    if (direction === 'down') return 'green'
+    return 'default'
+  }
+
+  const getDirectionLabel = (direction: string) => {
     if (direction === 'up') return '看涨'
     if (direction === 'down') return '看跌'
     return '震荡'
   }
 
-  return (
-    <div>
-      <h1 className="page-title">模型广场</h1>
-      <p className="page-description">
-        浏览社区共享的预测模型，发现优质策略，克隆模型或发起PK挑战。
-      </p>
+  const getDirectionIcon = (direction: string) => {
+    if (direction === 'up') return <RiseOutlined />
+    if (direction === 'down') return <FallOutlined />
+    return null
+  }
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={8}>
-          <Input.Search
-            placeholder="搜索模型名称或描述"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            onSearch={handleSearch}
-            enterButton={<SearchOutlined />}
-            allowClear
-          />
-        </Col>
-        <Col xs={12} sm={8}>
-          <Select
-            style={{ width: '100%' }}
-            options={TYPE_OPTIONS}
-            value={modelType}
-            onChange={(val) => {
-              setModelType(val)
-              setTimeout(fetchModels, 0)
-            }}
-          />
-        </Col>
-        <Col xs={12} sm={8}>
-          <Select
-            style={{ width: '100%' }}
-            options={SORT_OPTIONS}
-            value={sortBy}
-            onChange={(val) => {
-              setSortBy(val)
-              setTimeout(fetchModels, 0)
-            }}
-          />
-        </Col>
-      </Row>
+  const formatTime = (dateStr: string) => {
+    const date = new Date(dateStr)
+    const now = new Date()
+    const diffMs = now.getTime() - date.getTime()
+    const diffMin = Math.floor(diffMs / 60000)
+    if (diffMin < 1) return '刚刚'
+    if (diffMin < 60) return `${diffMin}分钟前`
+    const diffHour = Math.floor(diffMin / 60)
+    if (diffHour < 24) return `${diffHour}小时前`
+    const diffDay = Math.floor(diffHour / 24)
+    if (diffDay < 30) return `${diffDay}天前`
+    return date.toLocaleDateString()
+  }
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={16}>
-          <Spin spinning={loading}>
-            {models.length === 0 && !loading ? (
-              <Empty description="暂无社区模型" />
-            ) : (
-              <Row gutter={[16, 16]}>
-                {models.map((model) => (
-                  <Col xs={24} sm={12} key={model.id}>
-                    <Card
-                      hoverable
-                      onClick={() => navigate(`/community/model/${model.id}`)}
-                      style={{ height: '100%' }}
-                    >
-                      <div style={{ marginBottom: 12 }}>
-                        <Space>
-                          <Tag color={MODEL_TYPE_COLORS[model.model_type] || 'default'}>
-                            {model.model_type.toUpperCase()}
-                          </Tag>
-                          {model.metrics && model.metrics.accuracy !== undefined && (
-                            <Tag color="blue">
-                              准确率 {(model.metrics.accuracy * 100).toFixed(1)}%
-                            </Tag>
-                          )}
-                        </Space>
-                      </div>
-                      <h3 style={{ marginBottom: 8 }}>{model.name}</h3>
-                      <p style={{ color: '#999', fontSize: 13, marginBottom: 12, minHeight: 40 }}>
-                        {model.description || '暂无描述'}
-                      </p>
-                      <div style={{ marginBottom: 12 }}>
-                        <Space size={4} wrap>
-                          {model.features.slice(0, 4).map((f) => (
-                            <Tag key={f} style={{ fontSize: 11 }}>{f}</Tag>
-                          ))}
-                          {model.features.length > 4 && (
-                            <Tag style={{ fontSize: 11 }}>+{model.features.length - 4}</Tag>
-                          )}
-                        </Space>
-                      </div>
-                      <Row justify="space-between" align="middle">
-                        <Col>
-                          <Space>
-                            <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
-                              {model.author?.username?.[0] || '?'}
-                            </Avatar>
-                            <span style={{ fontSize: 13 }}>{model.author?.username || '匿名'}</span>
-                          </Space>
-                        </Col>
-                        <Col>
-                          <Space size={16}>
-                            <span
-                              style={{ cursor: 'pointer', color: model.is_liked ? '#eb2f96' : '#999' }}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleLike(model.id)
-                              }}
-                            >
-                              <HeartOutlined /> {model.likes_count}
-                            </span>
-                            <span
-                              style={{ cursor: 'pointer', color: '#999' }}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleClone(model.id)
-                              }}
-                            >
-                              <CopyOutlined /> {model.clones_count}
-                            </span>
-                          </Space>
-                        </Col>
-                      </Row>
-                    </Card>
+  const renderModelSquare = () => (
+    <Spin spinning={modelsLoading}>
+      {models.length === 0 && !modelsLoading ? (
+        <Empty description="暂无社区模型" />
+      ) : (
+        <Row gutter={[16, 16]}>
+          {models.map((model) => (
+            <Col xs={24} sm={12} key={model.id}>
+              <Card
+                hoverable
+                onClick={() => navigate(`/community/model/${model.id}`)}
+                style={{ height: '100%' }}
+              >
+                <div style={{ marginBottom: 12 }}>
+                  <Space>
+                    <Tag color={MODEL_TYPE_COLORS[model.model_type] || 'default'}>
+                      {model.model_type.toUpperCase()}
+                    </Tag>
+                    {model.metrics && model.metrics.accuracy !== undefined && (
+                      <Tag color="blue">
+                        准确率 {(model.metrics.accuracy * 100).toFixed(1)}%
+                      </Tag>
+                    )}
+                  </Space>
+                </div>
+                <h3 style={{ marginBottom: 8 }}>{model.name}</h3>
+                <p style={{ color: '#999', fontSize: 13, marginBottom: 12, minHeight: 40 }}>
+                  {model.description || '暂无描述'}
+                </p>
+                <div style={{ marginBottom: 12 }}>
+                  <Space size={4} wrap>
+                    {model.features.slice(0, 4).map((f) => (
+                      <Tag key={f} style={{ fontSize: 11 }}>{f}</Tag>
+                    ))}
+                    {model.features.length > 4 && (
+                      <Tag style={{ fontSize: 11 }}>+{model.features.length - 4}</Tag>
+                    )}
+                  </Space>
+                </div>
+                <Row justify="space-between" align="middle">
+                  <Col>
+                    <Space>
+                      <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
+                        {model.author?.username?.[0] || '?'}
+                      </Avatar>
+                      <span style={{ fontSize: 13 }}>{model.author?.username || '匿名'}</span>
+                    </Space>
                   </Col>
-                ))}
-              </Row>
-            )}
-          </Spin>
-        </Col>
-
-        <Col xs={24} lg={8}>
-          <Card
-            title={
-              <Space>
-                <ThunderboltOutlined style={{ color: '#faad14' }} />
-                <span>热门预测信号</span>
-              </Space>
-            }
-            style={{ marginBottom: 16 }}
-          >
-            <List
-              dataSource={signals}
-              renderItem={(signal) => (
-                <List.Item>
-                  <List.Item.Meta
-                    avatar={getDirectionIcon(signal.direction)}
-                    title={
-                      <Space>
-                        <span>{signal.stock_code}</span>
-                        <Tag color={signal.direction === 'up' ? 'red' : signal.direction === 'down' ? 'green' : 'default'}>
-                          {getDirectionText(signal.direction)}
-                        </Tag>
-                        {signal.confidence !== undefined && (
-                          <Tag color="blue">置信度 {(signal.confidence * 100).toFixed(0)}%</Tag>
-                        )}
-                      </Space>
-                    }
-                    description={
-                      <Space size={4}>
-                        <span style={{ fontSize: 12 }}>{signal.author?.username || '匿名'}</span>
-                        <span style={{ fontSize: 12, color: '#999' }}>
-                          {signal.prediction_date}
-                        </span>
-                      </Space>
-                    }
-                  />
-                </List.Item>
-              )}
-              locale={{ emptyText: '暂无信号' }}
-            />
-          </Card>
-
-          <Card
-            title={
-              <Space>
-                <TrophyOutlined style={{ color: '#faad14' }} />
-                <span>积分排行榜</span>
-              </Space>
-            }
-          >
-            <List
-              dataSource={leaderboard}
-              renderItem={(user, index) => (
-                <List.Item>
-                  <List.Item.Meta
-                    avatar={
-                      <Avatar
-                        size="small"
-                        style={{
-                          backgroundColor:
-                            index === 0 ? '#f5222d' : index === 1 ? '#faad14' : index === 2 ? '#fa8c16' : '#1890ff',
+                  <Col>
+                    <Space size={16}>
+                      <span
+                        style={{ cursor: 'pointer', color: model.is_liked ? '#eb2f96' : '#999' }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleLikeModel(model.id)
                         }}
                       >
-                        {index + 1}
+                        <HeartOutlined /> {model.likes_count}
+                      </span>
+                      <span
+                        style={{ cursor: 'pointer', color: '#999' }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleCloneModel(model.id)
+                        }}
+                      >
+                        <CopyOutlined /> {model.clones_count}
+                      </span>
+                    </Space>
+                  </Col>
+                </Row>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      )}
+    </Spin>
+  )
+
+  const renderPredictionShare = () => (
+    <Spin spinning={predictionsLoading}>
+      {predictions.length === 0 && !predictionsLoading ? (
+        <Empty description="暂无预测分享" />
+      ) : (
+        <Row gutter={[16, 16]}>
+          {predictions.map((item) => (
+            <Col xs={24} sm={12} key={item.id}>
+              <Card style={{ height: '100%' }}>
+                <Row justify="space-between" align="middle" style={{ marginBottom: 12 }}>
+                  <Col>
+                    <Space>
+                      <span style={{ fontWeight: 600, fontSize: 15 }}>
+                        {item.stock_name || item.stock_code}
+                      </span>
+                      <Tag style={{ fontSize: 11 }}>{item.stock_code}</Tag>
+                    </Space>
+                  </Col>
+                  <Col>
+                    <Tag
+                      color={getDirectionColor(item.direction ?? 'neutral')}
+                      icon={getDirectionIcon(item.direction ?? 'neutral')}
+                    >
+                      {getDirectionLabel(item.direction ?? 'neutral')}
+                    </Tag>
+                  </Col>
+                </Row>
+
+                <Row gutter={16} style={{ marginBottom: 12 }}>
+                  {item.confidence != null && (
+                    <Col>
+                      <div style={{ fontSize: 12, color: '#999' }}>置信度</div>
+                      <div style={{ fontWeight: 600, color: '#1890ff' }}>
+                        {(item.confidence * 100).toFixed(0)}%
+                      </div>
+                    </Col>
+                  )}
+                  {item.prediction_value != null && (
+                    <Col>
+                      <div style={{ fontSize: 12, color: '#999' }}>预测值</div>
+                      <div style={{ fontWeight: 600 }}>
+                        ¥{item.prediction_value.toFixed(2)}
+                      </div>
+                    </Col>
+                  )}
+                </Row>
+
+                {(item.model_name || item.model_type) && (
+                  <div style={{ marginBottom: 12 }}>
+                    <Space>
+                      {item.model_type && (
+                        <Tag color={MODEL_TYPE_COLORS[item.model_type] || 'default'}>
+                          {item.model_type.toUpperCase()}
+                        </Tag>
+                      )}
+                      {item.model_name && (
+                        <span style={{ fontSize: 13, color: '#666' }}>{item.model_name}</span>
+                      )}
+                    </Space>
+                  </div>
+                )}
+
+                <Row justify="space-between" align="middle">
+                  <Col>
+                    <Space>
+                      <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
+                        {item.author?.username?.[0] || '?'}
                       </Avatar>
-                    }
-                    title={user.username || `用户${user.user_id}`}
-                    description={
-                      <Space>
-                        <StarOutlined style={{ color: '#faad14' }} />
-                        <span>{user.total_points} 积分</span>
-                        <Tag>Lv.{user.level}</Tag>
-                      </Space>
-                    }
-                  />
-                </List.Item>
-              )}
-              locale={{ emptyText: '暂无排行数据' }}
+                      <span style={{ fontSize: 13 }}>{item.author?.username || '匿名'}</span>
+                      <span style={{ fontSize: 12, color: '#999' }}>
+                        {formatTime(item.created_at)}
+                      </span>
+                    </Space>
+                  </Col>
+                  <Col>
+                    <span
+                      style={{ cursor: 'pointer', color: item.is_liked ? '#eb2f96' : '#999' }}
+                      onClick={() => handleLikePrediction(item.id)}
+                    >
+                      <HeartOutlined /> {item.likes_count}
+                    </span>
+                  </Col>
+                </Row>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      )}
+    </Spin>
+  )
+
+  const renderSidebar = () => (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <DailyGuess compact />
+
+      <Card
+        title={
+          <Space>
+            <TeamOutlined style={{ color: '#1890ff' }} />
+            <span>关注动态</span>
+          </Space>
+        }
+        size="small"
+      >
+        {followingUpdates.length === 0 ? (
+          <Empty description="暂无动态" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <List
+            size="small"
+            dataSource={followingUpdates}
+            renderItem={(update) => (
+              <List.Item style={{ padding: '8px 0' }}>
+                <List.Item.Meta
+                  avatar={
+                    <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
+                      {update.username?.[0] || '?'}
+                    </Avatar>
+                  }
+                  title={
+                    <span style={{ fontSize: 13 }}>
+                      {update.nickname || update.username}
+                    </span>
+                  }
+                  description={
+                    <span style={{ fontSize: 12, color: '#999' }}>
+                      {update.description}
+                    </span>
+                  }
+                />
+                <span style={{ fontSize: 11, color: '#bbb', whiteSpace: 'nowrap' }}>
+                  {formatTime(update.created_at)}
+                </span>
+              </List.Item>
+            )}
+          />
+        )}
+      </Card>
+
+      <Card
+        title={
+          <Space>
+            <TrophyOutlined style={{ color: '#faad14' }} />
+            <span>积分排行榜</span>
+          </Space>
+        }
+        size="small"
+      >
+        <List
+          size="small"
+          dataSource={leaderboard}
+          renderItem={(user, index) => (
+            <List.Item style={{ padding: '6px 0' }}>
+              <List.Item.Meta
+                avatar={
+                  <Avatar
+                    size="small"
+                    style={{
+                      backgroundColor:
+                        index === 0 ? '#f5222d' : index === 1 ? '#faad14' : index === 2 ? '#fa8c16' : '#1890ff',
+                    }}
+                  >
+                    {index + 1}
+                  </Avatar>
+                }
+                title={
+                  <span style={{ fontSize: 13 }}>{user.username || `用户${user.user_id}`}</span>
+                }
+                description={
+                  <Space size={4}>
+                    <StarOutlined style={{ color: '#faad14', fontSize: 11 }} />
+                    <span style={{ fontSize: 12 }}>{user.total_points} 积分</span>
+                    <Tag style={{ fontSize: 11, lineHeight: '16px', padding: '0 4px' }}>Lv.{user.level}</Tag>
+                  </Space>
+                }
+              />
+            </List.Item>
+          )}
+          locale={{ emptyText: '暂无排行数据' }}
+        />
+      </Card>
+    </Space>
+  )
+
+  const tabItems = [
+    {
+      key: 'models',
+      label: '模型广场',
+      children: (
+        <div>
+          <Row gutter={[16, 12]} style={{ marginBottom: 16 }}>
+            <Col xs={24} sm={8}>
+              <Input.Search
+                placeholder="搜索模型名称或描述"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                onSearch={() => fetchModels()}
+                enterButton={<SearchOutlined />}
+                allowClear
+              />
+            </Col>
+            <Col xs={12} sm={8}>
+              <Select
+                style={{ width: '100%' }}
+                options={TYPE_OPTIONS}
+                value={modelType}
+                onChange={(val) => setModelType(val)}
+              />
+            </Col>
+            <Col xs={12} sm={8}>
+              <Select
+                style={{ width: '100%' }}
+                options={SORT_OPTIONS}
+                value={sortBy}
+                onChange={(val) => setSortBy(val)}
+              />
+            </Col>
+          </Row>
+          {renderModelSquare()}
+        </div>
+      ),
+    },
+    {
+      key: 'predictions',
+      label: '预测分享',
+      children: (
+        <div>
+          <Row gutter={[16, 12]} style={{ marginBottom: 16 }}>
+            <Col xs={24} sm={8}>
+              <Select
+                style={{ width: '100%' }}
+                options={PREDICTION_SORT_OPTIONS}
+                value={predictionSortBy}
+                onChange={(val) => setPredictionSortBy(val)}
+              />
+            </Col>
+          </Row>
+          {renderPredictionShare()}
+        </div>
+      ),
+    },
+  ]
+
+  return (
+    <div>
+      <h1 className="page-title">社区</h1>
+      <p className="page-description">
+        浏览社区共享的预测模型与预测分享，发现优质策略，参与每日一猜。
+      </p>
+
+      <Row gutter={[24, 24]}>
+        <Col xs={24} lg={17}>
+          <Card>
+            <Tabs
+              activeKey={activeTab}
+              onChange={setActiveTab}
+              items={tabItems}
             />
           </Card>
+        </Col>
+
+        <Col xs={24} lg={7}>
+          {renderSidebar()}
         </Col>
       </Row>
     </div>

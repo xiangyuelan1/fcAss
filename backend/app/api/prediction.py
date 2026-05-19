@@ -1,17 +1,19 @@
 """
 预测API - 使用已训练模型进行股价预测
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
+from collections import defaultdict
 
 from app.core.database import get_db
 from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
 from app.services.feature_service import FeatureService
 from app.services.data_service import DataService
 from app.models.training import TrainingTask
+from app.models.prediction_share import PredictionShare
 from app.auth import get_current_active_user
 from app.models.user import User as UserModel
 
@@ -391,3 +393,129 @@ def _compute_multi_features(prediction: float, target: str, df, latest_close: Op
             result['daily_avg_change_pct'] = round(float(prediction * 100 / 5), 4)
 
     return result
+
+
+# ============================================================
+# 预测分享
+# ============================================================
+
+class SharePredictionRequest(BaseModel):
+    """预测分享请求"""
+    task_id: int = Field(..., description="训练任务ID")
+    stock_code: str = Field(..., description="股票代码")
+    stock_name: Optional[str] = Field(None, description="股票名称")
+    prediction_data: Optional[Dict[str, Any]] = Field(None, description="预测结果数据")
+
+
+@router.post("/predict/share")
+async def share_prediction(
+    data: SharePredictionRequest,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """将预测结果发布到社区"""
+    task = db.query(TrainingTask).filter(TrainingTask.id == data.task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"训练任务 {data.task_id} 不存在")
+    _verify_task_ownership(task, current_user)
+
+    user_model = task.user_model
+    prediction_data = data.prediction_data or {}
+
+    direction = prediction_data.get("prediction_label")
+    prediction_value = prediction_data.get("prediction")
+    confidence = prediction_data.get("confidence")
+    predicted_change_pct = prediction_data.get("predicted_change_pct")
+
+    share = PredictionShare(
+        user_id=current_user.id,
+        task_id=data.task_id,
+        model_id=user_model.id if user_model else None,
+        model_name=user_model.name if user_model else None,
+        model_type=user_model.model_type if user_model else None,
+        stock_code=data.stock_code,
+        stock_name=data.stock_name,
+        target_type=user_model.target if user_model else None,
+        direction=direction,
+        prediction_value=prediction_value,
+        confidence=confidence,
+        predicted_change_pct=predicted_change_pct,
+        prediction_data=prediction_data,
+        is_published=True,
+    )
+    db.add(share)
+    db.commit()
+    db.refresh(share)
+    return {"success": True, "message": "预测已发布到社区", "share": share.to_dict()}
+
+
+@router.get("/predictions/my")
+async def get_my_predictions(
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """获取我的预测结果（按股票分组）"""
+    shares = db.query(PredictionShare).filter(
+        PredictionShare.user_id == current_user.id
+    ).order_by(PredictionShare.created_at.desc()).all()
+
+    grouped = defaultdict(list)
+    for share in shares:
+        grouped[share.stock_code].append(share.to_dict())
+
+    return {"items": dict(grouped), "total": len(shares)}
+
+
+@router.get("/predictions/community")
+async def get_community_predictions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """获取社区预测分享列表"""
+    query = db.query(PredictionShare).filter(
+        PredictionShare.is_published == True
+    )
+    total = query.count()
+    offset = (page - 1) * page_size
+    items = query.order_by(PredictionShare.created_at.desc()).offset(offset).limit(page_size).all()
+
+    return {
+        "items": [item.to_dict() for item in items],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+@router.post("/predictions/{share_id}/like")
+async def like_prediction(
+    share_id: int,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """点赞预测分享"""
+    share = db.query(PredictionShare).filter(PredictionShare.id == share_id).first()
+    if not share:
+        raise HTTPException(status_code=404, detail="预测分享不存在")
+    share.likes_count = (share.likes_count or 0) + 1
+    db.commit()
+    return {"success": True, "likes_count": share.likes_count}
+
+
+@router.delete("/predictions/{share_id}")
+async def delete_prediction(
+    share_id: int,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """删除预测结果"""
+    share = db.query(PredictionShare).filter(
+        PredictionShare.id == share_id,
+        PredictionShare.user_id == current_user.id,
+    ).first()
+    if not share:
+        raise HTTPException(status_code=404, detail="预测分享不存在或无权删除")
+    db.delete(share)
+    db.commit()
+    return {"success": True, "message": "预测已删除"}
