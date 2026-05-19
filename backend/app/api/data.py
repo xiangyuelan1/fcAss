@@ -570,21 +570,43 @@ async def sync_stock_pool(
         import akshare as ak
         import pandas as pd
 
-        df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
-        df_sz = ak.stock_info_sz_name_code(indicator="A股列表")
-
         records = []
-        for _, row in df_sh.iterrows():
-            code = str(row.get("证券代码", "")).zfill(6)
-            name = str(row.get("证券简称", ""))
-            if code and name:
-                records.append({"code": f"sh{code}", "name": name, "exchange": "SH"})
-
-        for _, row in df_sz.iterrows():
-            code = str(row.get("A股代码", "")).zfill(6)
-            name = str(row.get("A股简称", ""))
-            if code and name:
-                records.append({"code": f"sz{code}", "name": name, "exchange": "SZ"})
+        try:
+            df = ak.stock_info_a_code_name()
+            for _, row in df.iterrows():
+                code = str(row.get("code", "")).zfill(6)
+                name = str(row.get("name", ""))
+                if not code or not name or name.startswith(("N", "ST", "*ST")):
+                    continue
+                if code.startswith("6"):
+                    exchange = "SH"
+                elif code.startswith("0") or code.startswith("3"):
+                    exchange = "SZ"
+                elif code.startswith("8") or code.startswith("4"):
+                    exchange = "BJ"
+                else:
+                    continue
+                records.append({"code": code, "name": name, "exchange": exchange})
+        except Exception as e:
+            logger.warning(f"stock_info_a_code_name 获取失败，尝试分板块获取: {e}")
+            try:
+                df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
+                for _, row in df_sh.iterrows():
+                    code = str(row.get("证券代码", "")).zfill(6)
+                    name = str(row.get("证券简称", ""))
+                    if code and name:
+                        records.append({"code": code, "name": name, "exchange": "SH"})
+            except Exception as e2:
+                logger.warning(f"获取沪市股票列表失败: {e2}")
+            try:
+                df_sz = ak.stock_info_sz_name_code(indicator="A股列表")
+                for _, row in df_sz.iterrows():
+                    code = str(row.get("A股代码", "")).zfill(6)
+                    name = str(row.get("A股简称", ""))
+                    if code and name:
+                        records.append({"code": code, "name": name, "exchange": "SZ"})
+            except Exception as e2:
+                logger.warning(f"获取深市股票列表失败: {e2}")
 
     except ImportError:
         # akshare 未安装，使用 baostock 降级方案
@@ -614,12 +636,23 @@ async def sync_stock_pool(
             new_count += 1
 
     db.commit()
+
+    # 同步行业信息（仅填充尚未归属行业的股票）
+    industry_count = 0
+    try:
+        service = DataService(db)
+        industry_count = service._sync_industry_info()
+    except Exception as e:
+        logger.warning(f"行业信息同步失败: {e}")
+
     return {
         "success": True,
-        "message": f"同步完成：新增 {new_count} 只，更新 {update_count} 只，总计 {len(records)} 只",
+        "message": f"同步完成：新增 {new_count} 只，更新 {update_count} 只，总计 {len(records)} 只"
+                   + (f"，行业信息更新 {industry_count} 只" if industry_count > 0 else ""),
         "synced_count": len(records),
         "new_count": new_count,
         "update_count": update_count,
+        "industry_updated_count": industry_count,
     }
 
 
@@ -630,7 +663,7 @@ def _sync_stock_pool_via_baostock() -> list:
     根据股票代码数字前缀判断交易所：6开头=SH，0/3开头=SZ，8/4开头=BJ。
 
     Returns:
-        股票信息列表 [{'code': 'sh600519', 'name': '贵州茅台', 'exchange': 'SH'}, ...]
+        股票信息列表 [{'code': '600519', 'name': '贵州茅台', 'exchange': 'SH'}, ...]
     """
     import baostock as bs
 
@@ -647,22 +680,18 @@ def _sync_stock_pool_via_baostock() -> list:
             if not raw_code or not code_name:
                 continue
 
-            # baostock 返回格式为 "sh.600000"，直接作为 code 使用（与现有格式一致）
             pure_code = raw_code.split('.')[-1] if '.' in raw_code else raw_code
 
             if pure_code.startswith('6'):
                 exchange = 'SH'
-                prefix = 'sh'
             elif pure_code.startswith('0') or pure_code.startswith('3'):
                 exchange = 'SZ'
-                prefix = 'sz'
             elif pure_code.startswith('8') or pure_code.startswith('4'):
                 exchange = 'BJ'
-                prefix = 'bj'
             else:
                 continue
 
-            records.append({"code": f"{prefix}{pure_code}", "name": code_name, "exchange": exchange})
+            records.append({"code": pure_code, "name": code_name, "exchange": exchange})
     except Exception as e:
         logger.warning(f"baostock 降级方案获取股票列表失败: {e}")
     finally:

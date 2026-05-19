@@ -77,6 +77,15 @@ interface PredictionRecord {
   probability_up?: number | null
   probability_down?: number | null
   daily_avg_change_pct?: number | null
+  predicted_trend_days?: number | null
+  predicted_trend_pct?: number | null
+  trend_direction?: string | null
+  predicted_weeks?: number | null
+  gain_target_pct?: number | null
+  predicted_open?: number | null
+  predicted_high?: number | null
+  predicted_low?: number | null
+  predicted_close?: number | null
 }
 
 interface RealtimeQuote {
@@ -759,6 +768,15 @@ const TrainingPredict: React.FC = () => {
       probability_up: result.probability_up ?? null,
       probability_down: result.probability_down ?? null,
       daily_avg_change_pct: result.daily_avg_change_pct ?? null,
+      predicted_trend_days: result.predicted_trend_days ?? null,
+      predicted_trend_pct: result.predicted_trend_pct ?? null,
+      trend_direction: result.trend_direction ?? null,
+      predicted_weeks: result.predicted_weeks ?? null,
+      gain_target_pct: result.gain_target_pct ?? null,
+      predicted_open: result.predicted_open ?? null,
+      predicted_high: result.predicted_high ?? null,
+      predicted_low: result.predicted_low ?? null,
+      predicted_close: result.predicted_close ?? null,
     }
     setHistoryRecords((prev) => [record, ...prev])
   }
@@ -1449,6 +1467,100 @@ const TrainingPredict: React.FC = () => {
         )
       }
 
+      if (targetType === 'next_day_ohlc') {
+        return (
+          <>
+            <Col span={6}>
+              <Card>
+                <Statistic title="预测开盘价" value={latest.predicted_open ?? 0} precision={2} prefix="¥" />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card>
+                <Statistic title="预测最高价" value={latest.predicted_high ?? 0} precision={2} prefix="¥" valueStyle={{ color: '#f5222d' }} />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card>
+                <Statistic title="预测最低价" value={latest.predicted_low ?? 0} precision={2} prefix="¥" valueStyle={{ color: '#52c41a' }} />
+              </Card>
+            </Col>
+            <Col span={6}>
+              <Card>
+                <Statistic title="预测收盘价" value={latest.predicted_close ?? 0} precision={2} prefix="¥" />
+              </Card>
+            </Col>
+          </>
+        )
+      }
+
+      if (targetType === 'trend_30d' || targetType === 'trend_60d' || targetType === 'trend_90d') {
+        const trendUp = latest.trend_direction === '上涨'
+        const trendDown = latest.trend_direction === '下跌'
+        return (
+          <>
+            <Col span={8}>
+              <Card>
+                <Statistic
+                  title="预测趋势"
+                  value={latest.trend_direction ?? '震荡'}
+                  valueStyle={trendUp ? { color: '#f5222d' } : trendDown ? { color: '#52c41a' } : { color: '#faad14' }}
+                  prefix={trendUp ? <ArrowUpOutlined /> : trendDown ? <ArrowDownOutlined /> : <MinusOutlined />}
+                />
+              </Card>
+            </Col>
+            <Col span={8}>
+              <Card>
+                <Statistic
+                  title="预测幅度"
+                  value={latest.predicted_trend_pct ?? 0}
+                  suffix="%"
+                  precision={2}
+                  valueStyle={trendUp ? { color: '#f5222d' } : trendDown ? { color: '#52c41a' } : { color: '#faad14' }}
+                />
+              </Card>
+            </Col>
+            <Col span={8}>
+              <Card>
+                <Statistic
+                  title="预测周期"
+                  value={latest.predicted_trend_days ?? 0}
+                  suffix="天"
+                />
+              </Card>
+            </Col>
+          </>
+        )
+      }
+
+      if (targetType === 'time_to_gain_pct') {
+        return (
+          <>
+            <Col span={12}>
+              <Card>
+                <Statistic
+                  title="预计所需时间"
+                  value={latest.predicted_weeks ?? 0}
+                  suffix="周"
+                  precision={1}
+                  valueStyle={{ color: '#1890ff' }}
+                />
+              </Card>
+            </Col>
+            <Col span={12}>
+              <Card>
+                <Statistic
+                  title="目标涨幅"
+                  value={latest.gain_target_pct ?? 10}
+                  suffix="%"
+                  valueStyle={{ color: '#faad14' }}
+                />
+              </Card>
+            </Col>
+          </>
+        )
+      }
+
       return (
         <>
           <Col span={12}>
@@ -1558,7 +1670,12 @@ const TrainingPredict: React.FC = () => {
               <Descriptions.Item label="预测目标">
                 {selectedPredictModel.target === 'next_day_return' ? '次日收益率' :
                  selectedPredictModel.target === 'next_day_direction' ? '次日涨跌方向' :
+                 selectedPredictModel.target === 'next_day_ohlc' ? '次日OHLC' :
                  selectedPredictModel.target === 'price_change_5d' ? '5日价格变化' :
+                 selectedPredictModel.target === 'trend_30d' ? '30日趋势' :
+                 selectedPredictModel.target === 'trend_60d' ? '60日趋势' :
+                 selectedPredictModel.target === 'trend_90d' ? '90日趋势' :
+                 selectedPredictModel.target === 'time_to_gain_pct' ? '涨幅时间预测' :
                  selectedPredictModel.target === 'multi_feature_next_day' ? '多维预测（收益率+波动率+量变率）' : selectedPredictModel.target}
               </Descriptions.Item>
               <Descriptions.Item label="特征数量">{selectedPredictModel.features?.length || 0}个指标</Descriptions.Item>

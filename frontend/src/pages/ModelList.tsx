@@ -290,14 +290,35 @@ const ModelList: React.FC = () => {
       ),
     },
     {
+      title: '预测目标',
+      dataIndex: 'target',
+      key: 'target',
+      width: 120,
+      render: (target: string) => {
+        const targetMap: Record<string, string> = {
+          'next_day_direction': '次日涨跌',
+          'next_day_return': '次日收益率',
+          'next_day_ohlc': '次日OHLC',
+          'price_change_5d': '5日变化',
+          'trend_30d': '30日趋势',
+          'trend_60d': '60日趋势',
+          'trend_90d': '90日趋势',
+          'time_to_gain_pct': '涨幅时间',
+          'multi_feature_next_day': '多维数据',
+        }
+        return <Tag color="blue">{targetMap[target] || target}</Tag>
+      },
+    },
+    {
       title: '训练股票',
       dataIndex: 'stock_codes',
       key: 'stock_codes',
-      render: (codes: string[]) => (
-        <Tooltip title={codes.join(', ')}>
-          <Tag>{codes.length}只股票</Tag>
-        </Tooltip>
-      ),
+      width: 150,
+      render: (codes: string[]) => {
+        if (!codes || codes.length === 0) return '-'
+        const display = codes.length > 2 ? `${codes.slice(0, 2).join(', ')} +${codes.length - 2}` : codes.join(', ')
+        return <span>{display}</span>
+      },
     },
     {
       title: '状态',

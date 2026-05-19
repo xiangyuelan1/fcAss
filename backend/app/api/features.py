@@ -9,6 +9,9 @@ from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.services.feature_service import FeatureService
+from app.auth import get_current_active_user, optional_get_current_active_user
+from app.models.user_model import UserModel
+from app.models.custom_indicator import CustomIndicator
 
 router = APIRouter()
 
@@ -216,3 +219,125 @@ async def get_indicator_categories():
     service = FeatureService()
     categories = service.get_indicator_categories()
     return {"categories": categories}
+
+
+# ============ 自定义指标 API ============
+
+@router.get("/custom-indicators")
+async def get_custom_indicators(
+    published_only: bool = False,
+    current_user: Optional[UserModel] = Depends(optional_get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """获取自定义指标列表"""
+    query = db.query(CustomIndicator)
+    if published_only:
+        query = query.filter(CustomIndicator.is_published == True)
+    elif current_user:
+        query = query.filter(
+            (CustomIndicator.user_id == current_user.id) | (CustomIndicator.is_published == True)
+        )
+    else:
+        query = query.filter(CustomIndicator.is_published == True)
+    indicators = query.order_by(CustomIndicator.created_at.desc()).all()
+    return [ind.to_dict() for ind in indicators]
+
+
+@router.post("/custom-indicators")
+async def create_custom_indicator(
+    data: dict,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """创建自定义指标"""
+    required = ['name', 'formula']
+    for field in required:
+        if not data.get(field):
+            raise HTTPException(status_code=400, detail=f"缺少必填字段: {field}")
+
+    key = data.get('key') or f"custom_{data['name'].lower().replace(' ', '_')}"
+
+    indicator = CustomIndicator(
+        user_id=current_user.id,
+        name=data['name'],
+        key=key,
+        description=data.get('description'),
+        formula=data['formula'],
+        params=data.get('params', []),
+        category=data.get('category', '自定义'),
+        is_published=data.get('is_published', False),
+    )
+    db.add(indicator)
+    db.commit()
+    db.refresh(indicator)
+    return indicator.to_dict()
+
+
+@router.put("/custom-indicators/{indicator_id}")
+async def update_custom_indicator(
+    indicator_id: int,
+    data: dict,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """更新自定义指标"""
+    indicator = db.query(CustomIndicator).filter(CustomIndicator.id == indicator_id).first()
+    if not indicator:
+        raise HTTPException(status_code=404, detail="指标不存在")
+    if indicator.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权修改")
+
+    for field in ['name', 'description', 'formula', 'params', 'category', 'is_published']:
+        if field in data:
+            setattr(indicator, field, data[field])
+    db.commit()
+    return indicator.to_dict()
+
+
+@router.delete("/custom-indicators/{indicator_id}")
+async def delete_custom_indicator(
+    indicator_id: int,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """删除自定义指标"""
+    indicator = db.query(CustomIndicator).filter(CustomIndicator.id == indicator_id).first()
+    if not indicator:
+        raise HTTPException(status_code=404, detail="指标不存在")
+    if indicator.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权删除")
+    db.delete(indicator)
+    db.commit()
+    return {"success": True}
+
+
+@router.post("/custom-indicators/{indicator_id}/like")
+async def like_custom_indicator(
+    indicator_id: int,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """点赞自定义指标"""
+    indicator = db.query(CustomIndicator).filter(CustomIndicator.id == indicator_id).first()
+    if not indicator:
+        raise HTTPException(status_code=404, detail="指标不存在")
+    indicator.likes_count += 1
+    db.commit()
+    return {"success": True, "likes_count": indicator.likes_count}
+
+
+@router.post("/custom-indicators/{indicator_id}/publish")
+async def publish_custom_indicator(
+    indicator_id: int,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """发布自定义指标到社区"""
+    indicator = db.query(CustomIndicator).filter(CustomIndicator.id == indicator_id).first()
+    if not indicator:
+        raise HTTPException(status_code=404, detail="指标不存在")
+    if indicator.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权操作")
+    indicator.is_published = True
+    db.commit()
+    return {"success": True}

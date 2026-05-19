@@ -54,6 +54,14 @@ class PredictResponse(BaseModel):
     probability_up: Optional[float] = None
     probability_down: Optional[float] = None
     daily_avg_change_pct: Optional[float] = None
+    predicted_trend_days: Optional[int] = None
+    predicted_trend_pct: Optional[float] = None
+    trend_direction: Optional[str] = None
+    predicted_weeks: Optional[float] = None
+    gain_target_pct: Optional[float] = None
+    predicted_open: Optional[float] = None
+    predicted_high: Optional[float] = None
+    predicted_low: Optional[float] = None
 
 
 class BatchPredictRequest(BaseModel):
@@ -191,6 +199,14 @@ async def predict(
         probability_up=multi_features.get('probability_up'),
         probability_down=multi_features.get('probability_down'),
         daily_avg_change_pct=multi_features.get('daily_avg_change_pct'),
+        predicted_trend_days=multi_features.get('predicted_trend_days'),
+        predicted_trend_pct=multi_features.get('predicted_trend_pct'),
+        trend_direction=multi_features.get('trend_direction'),
+        predicted_weeks=multi_features.get('predicted_weeks'),
+        gain_target_pct=multi_features.get('gain_target_pct'),
+        predicted_open=multi_features.get('predicted_open'),
+        predicted_high=multi_features.get('predicted_high'),
+        predicted_low=multi_features.get('predicted_low'),
     )
 
 
@@ -322,7 +338,23 @@ def _prediction_to_label(prediction: float, target: str) -> str:
     """将原始预测值转换为可读标签"""
     if target == 'next_day_direction':
         return '看涨' if prediction > 0.5 else '看跌'
-    elif target == 'next_day_return' or target == 'price_change_5d':
+    elif target in ('next_day_return', 'price_change_5d'):
+        if prediction > 0.005:
+            return '看涨'
+        elif prediction < -0.005:
+            return '看跌'
+        else:
+            return '震荡'
+    elif target in ('trend_30d', 'trend_60d', 'trend_90d'):
+        if prediction > 0.02:
+            return '上涨'
+        elif prediction < -0.02:
+            return '下跌'
+        else:
+            return '震荡'
+    elif target == 'time_to_gain_pct':
+        return f'约{round(max(prediction, 0.1), 1)}周达标'
+    elif target == 'next_day_ohlc':
         if prediction > 0.005:
             return '看涨'
         elif prediction < -0.005:
@@ -337,13 +369,19 @@ def _compute_confidence(prediction: float, target: str) -> float:
     """根据预测值和目标类型计算置信度
 
     分类模型（next_day_direction）：prediction 本身是概率值，直接用距离 0.5 的程度
-    回归模型（next_day_return/price_change_5d）：用 |prediction| 映射到 0-1
+    回归模型（next_day_return/price_change_5d/trend_*/next_day_ohlc）：用 |prediction| 映射到 0-1
+    时间预测模型（time_to_gain_pct）：基于预测值与合理范围的偏差
     """
     if target == 'next_day_direction':
-        # 分类模型：prediction 是概率，距 0.5 越远置信度越高
         return abs(prediction - 0.5) * 2
+    elif target in ('trend_30d', 'trend_60d', 'trend_90d'):
+        abs_val = abs(prediction)
+        return min(abs_val / 0.1, 1.0)
+    elif target == 'time_to_gain_pct':
+        if prediction <= 0:
+            return 0.2
+        return min(1.0 / max(prediction, 0.5), 1.0)
     else:
-        # 回归模型：|prediction| 越大置信度越高，典型收益率 ±0.05
         abs_val = abs(prediction)
         return min(abs_val / 0.05, 1.0)
 
@@ -354,6 +392,9 @@ def _compute_predicted_change_pct(prediction: float, target: str) -> Optional[fl
     next_day_direction: 概率值 → 涨跌幅（0.5=0%, 1.0=+5%, 0.0=-5%）
     next_day_return: 原始收益率 → 百分比
     price_change_5d: 5日变化率 → 百分比
+    trend_30d/60d/90d: 趋势变化率 → 百分比
+    next_day_ohlc: 收盘价变化率 → 百分比
+    time_to_gain_pct: 不适用，返回 None
     """
     if target == 'next_day_direction':
         return (prediction - 0.5) * 10
@@ -361,6 +402,12 @@ def _compute_predicted_change_pct(prediction: float, target: str) -> Optional[fl
         return prediction * 100
     elif target == 'price_change_5d':
         return prediction * 100
+    elif target in ('trend_30d', 'trend_60d', 'trend_90d'):
+        return prediction * 100
+    elif target == 'next_day_ohlc':
+        return prediction * 100
+    elif target == 'time_to_gain_pct':
+        return None
     else:
         return prediction * 100
 
@@ -371,6 +418,9 @@ def _compute_multi_features(prediction: float, target: str, df, latest_close: Op
     multi_feature_next_day: 基于近期波动率和成交量变化趋势推导
     next_day_direction: 拆分上涨/下跌概率
     price_change_5d: 计算日均变化率
+    trend_30d/60d/90d: 趋势方向、幅度和周期
+    time_to_gain_pct: 预计所需周数和目标涨幅
+    next_day_ohlc: 基于预测值推导OHLC价格
     """
     result: Dict[str, Any] = {'target_type': target}
 
@@ -391,6 +441,28 @@ def _compute_multi_features(prediction: float, target: str, df, latest_close: Op
     elif target == 'price_change_5d':
         if prediction is not None:
             result['daily_avg_change_pct'] = round(float(prediction * 100 / 5), 4)
+
+    elif target in ('trend_30d', 'trend_60d', 'trend_90d'):
+        days = int(target.split('_')[1].rstrip('d'))
+        result['predicted_trend_days'] = days
+        result['predicted_trend_pct'] = round(prediction * 100, 4)
+        if prediction > 0.02:
+            result['trend_direction'] = '上涨'
+        elif prediction < -0.02:
+            result['trend_direction'] = '下跌'
+        else:
+            result['trend_direction'] = '震荡'
+
+    elif target == 'time_to_gain_pct':
+        result['predicted_weeks'] = round(max(prediction, 0.1), 2)
+        result['gain_target_pct'] = 10
+
+    elif target == 'next_day_ohlc':
+        if latest_close and latest_close > 0:
+            result['predicted_open'] = round(latest_close * (1 + prediction * 0.3), 2)
+            result['predicted_high'] = round(latest_close * (1 + abs(prediction) * 1.5), 2)
+            result['predicted_low'] = round(latest_close * (1 - abs(prediction) * 1.2), 2)
+            result['predicted_close'] = round(latest_close * (1 + prediction), 2)
 
     return result
 

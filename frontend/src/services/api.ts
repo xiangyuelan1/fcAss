@@ -138,6 +138,25 @@ export const featureApi = {
   // 获取指标分类
   getCategories: () =>
     api.get('/features/categories'),
+
+  // 自定义指标
+  getCustomIndicators: (params?: any) =>
+    api.get('/features/custom-indicators', { params }),
+
+  createCustomIndicator: (data: any) =>
+    api.post('/features/custom-indicators', data),
+
+  updateCustomIndicator: (id: number, data: any) =>
+    api.put(`/features/custom-indicators/${id}`, data),
+
+  deleteCustomIndicator: (id: number) =>
+    api.delete(`/features/custom-indicators/${id}`),
+
+  likeCustomIndicator: (id: number) =>
+    api.post(`/features/custom-indicators/${id}/like`),
+
+  publishCustomIndicator: (id: number) =>
+    api.post(`/features/custom-indicators/${id}/publish`),
 };
 
 // 模型管理API

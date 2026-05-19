@@ -144,7 +144,12 @@ const MODEL_INFO: Record<string, { desc: string; layers: { label: string; color:
 const TARGET_TYPES = [
   { value: 'next_day_direction', label: '次日涨跌方向', desc: '预测明天涨还是跌（二分类）', type: '分类', tag: '推荐', color: 'green' },
   { value: 'next_day_return', label: '次日收益率', desc: '预测明天涨跌幅度（回归）', type: '回归', tag: '常用', color: 'blue' },
+  { value: 'next_day_ohlc', label: '次日OHLC', desc: '预测下一个交易日的开盘价、最高价、最低价、收盘价', type: '回归', tag: '', color: '' },
   { value: 'price_change_5d', label: '5日价格变化', desc: '预测未来5天累计变化率', type: '回归', tag: '', color: '' },
+  { value: 'trend_30d', label: '30日趋势', desc: '预测未来30个交易日的上涨/下跌趋势和幅度', type: '回归', tag: '', color: '' },
+  { value: 'trend_60d', label: '60日趋势', desc: '预测未来60个交易日的上涨/下跌趋势和幅度', type: '回归', tag: '', color: '' },
+  { value: 'trend_90d', label: '90日趋势', desc: '预测未来90个交易日的上涨/下跌趋势和幅度', type: '回归', tag: '', color: '' },
+  { value: 'time_to_gain_pct', label: '涨幅时间预测', desc: '预测达到目标涨幅所需的时间（精确到交易周）', type: '回归', tag: '高级', color: 'purple' },
   { value: 'multi_feature_next_day', label: '次日多维数据', desc: '同时预测收益率+波动率+量变', type: '多维', tag: '高级', color: 'purple' },
 ]
 
@@ -276,6 +281,7 @@ const ModelBuilder: React.FC = () => {
   const [selectedIndicators, setSelectedIndicators] = useState<string[]>([])
   const [indicatorParams, setIndicatorParams] = useState<Record<string, Record<string, any>>>({})
   const [target, setTarget] = useState('next_day_direction')
+  const [gainTargetPct, setGainTargetPct] = useState(10)
   const [stockCodes, setStockCodes] = useState<string[]>([])
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
 
@@ -510,7 +516,7 @@ const ModelBuilder: React.FC = () => {
           features: selectedIndicators,
           feature_config: indicatorParams,
           target,
-          target_config: {},
+          target_config: target === 'time_to_gain_pct' ? { gain_target_pct: gainTargetPct } : {},
           stock_codes: stockCodes,
           train_date_range: dateRange
             ? { start: dateRange[0]?.format('YYYY-MM-DD'), end: dateRange[1]?.format('YYYY-MM-DD') }
@@ -924,6 +930,26 @@ const ModelBuilder: React.FC = () => {
                 </Select.Option>
               ))}
             </Select>
+            {target === 'time_to_gain_pct' && (
+              <div style={{ marginTop: 12 }}>
+                <label style={{ fontWeight: 500, fontSize: 14, display: 'block', marginBottom: 4 }}>
+                  目标涨幅 (%)
+                  <Tooltip title="设置希望达到的涨幅百分比，模型将预测达到该涨幅所需的时间">
+                    <InfoCircleOutlined style={{ marginLeft: 6, color: '#1890ff', cursor: 'help' }} />
+                  </Tooltip>
+                </label>
+                <InputNumber
+                  min={1}
+                  max={100}
+                  step={1}
+                  value={gainTargetPct}
+                  onChange={(val) => val && setGainTargetPct(val)}
+                  style={{ width: 200 }}
+                  size="large"
+                  suffix="%"
+                />
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: 24 }}>

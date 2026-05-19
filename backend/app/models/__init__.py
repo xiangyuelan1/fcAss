@@ -10,6 +10,7 @@ from app.models.daily_guess import DailyGuessStock, DailyGuessVote
 from app.models.follow import Follow
 from app.models.auto_predict_pool import AutoPredictPoolItem
 from app.models.prediction_share import PredictionShare
+from app.models.custom_indicator import CustomIndicator
 
 __all__ = [
     "Stock",
@@ -36,4 +37,5 @@ __all__ = [
     "Follow",
     "AutoPredictPoolItem",
     "PredictionShare",
+    "CustomIndicator",
 ]

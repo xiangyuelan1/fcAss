@@ -329,7 +329,7 @@ class TrainingService:
             training_progress[task_id] = {'stage': 'data_preparation', 'progress': 0}
             self._log(task_id, "阶段1: 数据准备中...")
             
-            X_train, X_val, y_train, y_val = self._prepare_data(user_model)
+            X_train, X_val, y_train, y_val = self._prepare_data(user_model, task_id)
             
             self._log(task_id, f"数据准备完成 | 训练集: {X_train.shape[0]}条, 验证集: {X_val.shape[0]}条, 特征维度: {X_train.shape[1]}")
             
@@ -371,11 +371,15 @@ class TrainingService:
             training_progress[task_id] = {'stage': 'failed', 'error': str(e)}
             self._log(task_id, f"训练失败: {str(e)}")
     
-    def _prepare_data(self, user_model: UserModel):
+    def _prepare_data(self, user_model: UserModel, task_id: int):
         """准备训练数据
         
         对每只股票：获取价格 → 计算特征 → 生成标签 → 标准化
         合并所有股票数据后按时间序列 80/20 划分训练集和验证集
+        
+        Args:
+            user_model: 用户模型配置
+            task_id: 训练任务ID，用于日志记录
         """
         features = []
         labels = []
@@ -438,6 +442,24 @@ class TrainingService:
                 df['target'] = df['close'].shift(-5) / df['close'] - 1
             elif target == 'multi_feature_next_day':
                 df['target'] = df['close'].shift(-1) / df['close'] - 1
+            elif target == 'next_day_ohlc':
+                # 预测次日开盘价、最高价、最低价、收盘价（归一化）
+                df['target'] = df['close'].shift(-1) / df['close'] - 1
+            elif target == 'trend_30d':
+                df['target'] = df['close'].shift(-30) / df['close'] - 1
+            elif target == 'trend_60d':
+                df['target'] = df['close'].shift(-60) / df['close'] - 1
+            elif target == 'trend_90d':
+                df['target'] = df['close'].shift(-90) / df['close'] - 1
+            elif target == 'time_to_gain_pct':
+                # 预测达到涨幅X%所需交易日数（近似为周数）
+                gain_target = user_model.target_config.get('gain_pct', 10) if user_model.target_config else 10
+                days_to_target = pd.Series(np.nan, index=df.index)
+                for i in range(1, 61):
+                    future_val = df['close'].shift(-i) / df['close'] - 1
+                    mask = (future_val >= gain_target / 100) & days_to_target.isna()
+                    days_to_target[mask] = i
+                df['target'] = days_to_target / 5  # 转换为周数
             else:
                 df['target'] = df['close'].shift(-1) / df['close'] - 1
             
@@ -477,6 +499,17 @@ class TrainingService:
     ):
         """训练PyTorch模型"""
         global training_progress
+        
+        # 填充config默认值，避免直接访问不存在的键导致KeyError
+        config.setdefault('hidden_size', 64)
+        config.setdefault('num_layers', 2)
+        config.setdefault('dropout', 0.2)
+        config.setdefault('learning_rate', 0.001)
+        config.setdefault('epochs', 100)
+        config.setdefault('batch_size', 32)
+        config.setdefault('hidden_layers', [128, 64])
+        config.setdefault('activation', 'relu')
+        config.setdefault('sequence_length', 20)
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
@@ -613,15 +646,28 @@ class TrainingService:
         """训练sklearn模型"""
         global training_progress
         
+        # 各模型类型的合法参数白名单，过滤掉不属于当前模型的参数，避免传入无效参数导致报错
         if model_type == 'xgboost':
             from xgboost import XGBRegressor
-            model = XGBRegressor(**config)
+            valid_params = {'n_estimators', 'max_depth', 'learning_rate', 'subsample',
+                            'colsample_bytree', 'min_child_weight', 'gamma', 'reg_alpha',
+                            'reg_lambda', 'objective', 'random_state', 'n_jobs'}
+            filtered = {k: v for k, v in config.items() if k in valid_params}
+            model = XGBRegressor(**filtered)
         elif model_type == 'lightgbm':
             from lightgbm import LGBMRegressor
-            model = LGBMRegressor(**config)
+            valid_params = {'n_estimators', 'max_depth', 'learning_rate', 'subsample',
+                            'colsample_bytree', 'min_child_weight', 'reg_alpha',
+                            'reg_lambda', 'objective', 'random_state', 'n_jobs',
+                            'num_leaves', 'min_data_in_leaf'}
+            filtered = {k: v for k, v in config.items() if k in valid_params}
+            model = LGBMRegressor(**filtered)
         elif model_type == 'randomforest':
             from sklearn.ensemble import RandomForestRegressor
-            model = RandomForestRegressor(**config)
+            valid_params = {'n_estimators', 'max_depth', 'min_samples_split', 'min_samples_leaf',
+                            'max_features', 'random_state', 'n_jobs'}
+            filtered = {k: v for k, v in config.items() if k in valid_params}
+            model = RandomForestRegressor(**filtered)
         else:
             raise ValueError(f"不支持的模型类型: {model_type}")
         

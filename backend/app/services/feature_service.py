@@ -188,6 +188,33 @@ class FeatureService:
                 
                 # 计算指标
                 df = self._calculate_indicator(df, indicator, calc_params)
+
+        # 计算自定义指标
+        custom_keys = [k for k in indicators if k.startswith('custom_')]
+        if custom_keys and self.db:
+            from app.models.custom_indicator import CustomIndicator
+            for custom_key in custom_keys:
+                ci = self.db.query(CustomIndicator).filter(CustomIndicator.key == custom_key).first()
+                if ci:
+                    try:
+                        local_vars = {
+                            'close': df['close'],
+                            'open': df['open'],
+                            'high': df['high'],
+                            'low': df['low'],
+                            'volume': df['volume'],
+                            'returns': df['close'].pct_change(),
+                            'amount': df.get('amount', pd.Series(0, index=df.index)),
+                            'change_pct': df.get('change_pct', pd.Series(0, index=df.index)),
+                            'np': np,
+                            'pd': pd,
+                        }
+                        result = eval(ci.formula, {"__builtins__": {}}, local_vars)
+                        if isinstance(result, pd.Series):
+                            df[custom_key] = result
+                    except Exception as e:
+                        import logging
+                        logging.getLogger(__name__).warning(f"自定义指标 {custom_key} 计算失败: {e}")
         
         return df
     

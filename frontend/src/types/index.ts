@@ -431,3 +431,19 @@ export interface PredictionShareItem {
   author?: { id: number; username: string; nickname?: string };
   created_at: string;
 }
+
+export interface CustomIndicator {
+  id: number;
+  user_id: number;
+  name: string;
+  key: string;
+  description: string | null;
+  formula: string;
+  params: any[] | null;
+  category: string;
+  is_published: boolean;
+  likes_count: number;
+  author?: { id: number; username: string; nickname?: string };
+  created_at: string;
+  updated_at: string | null;
+}

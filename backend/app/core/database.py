@@ -126,6 +126,24 @@ _MIGRATION_TABLES = {
         "CREATE INDEX IF NOT EXISTS ix_prediction_shares_stock_code ON prediction_shares(stock_code)",
         "CREATE INDEX IF NOT EXISTS ix_prediction_shares_is_published ON prediction_shares(is_published)",
     ],
+    "custom_indicators": [
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("user_id", "INTEGER NOT NULL"),
+        ("name", "VARCHAR(100) NOT NULL"),
+        ("key", "VARCHAR(100) NOT NULL"),
+        ("description", "TEXT"),
+        ("formula", "TEXT NOT NULL"),
+        ("params", "JSON"),
+        ("category", "VARCHAR(50) DEFAULT '自定义'"),
+        ("is_published", "BOOLEAN DEFAULT 0"),
+        ("likes_count", "INTEGER DEFAULT 0"),
+        ("created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP"),
+        ("updated_at", "DATETIME"),
+    ],
+    "custom_indicators_indexes": [
+        "CREATE INDEX IF NOT EXISTS ix_custom_indicators_user_id ON custom_indicators(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_custom_indicators_is_published ON custom_indicators(is_published)",
+    ],
 }
 
 
@@ -176,12 +194,10 @@ def _migrate_db():
             except Exception as e:
                 logger.warning(f"[迁移] 创建表 {table_name} 失败: {e}")
 
-    index_key = None
     for table_name in _MIGRATION_TABLES:
-        if table_name.endswith("_indexes"):
-            index_key = table_name
-    if index_key:
-        for idx_sql in _MIGRATION_TABLES[index_key]:
+        if not table_name.endswith("_indexes"):
+            continue
+        for idx_sql in _MIGRATION_TABLES[table_name]:
             try:
                 with engine.connect() as conn:
                     conn.execute(text(idx_sql))

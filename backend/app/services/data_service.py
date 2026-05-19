@@ -365,9 +365,19 @@ class DataService:
         return query.all()[::-1]
 
     def get_industries(self) -> List[str]:
-        """获取所有行业列表（从数据库中已存的股票记录）"""
+        """获取所有行业列表（优先从数据库，降级从akshare获取）"""
         industries = self.db.query(Stock.industry).distinct().all()
-        return [ind[0] for ind in industries if ind[0]]
+        result = sorted([ind[0] for ind in industries if ind[0]])
+
+        if not result:
+            try:
+                import akshare as ak
+                df = ak.stock_board_industry_name_em()
+                result = sorted(df['板块名称'].dropna().astype(str).tolist())
+            except Exception:
+                pass
+
+        return result
 
     def sync_stock_pool(self) -> int:
         """同步A股股票池（仅代码和名称，不获取价格数据）
@@ -383,31 +393,47 @@ class DataService:
 
         all_stocks = []
 
-        # 优先尝试 akshare
+        # 优先尝试 akshare（一次性获取全市场A股，含主板、科创板、创业板、北交所）
         try:
             import akshare as ak
 
-            # 沪市主板
             try:
-                df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
-                for _, row in df_sh.iterrows():
-                    code = str(row.get('证券代码', '')).zfill(6)
-                    name = str(row.get('证券简称', ''))
-                    if code and name and not name.startswith('N'):
-                        all_stocks.append({'code': code, 'name': name, 'exchange': 'SH'})
+                df = ak.stock_info_a_code_name()
+                for _, row in df.iterrows():
+                    code = str(row.get('code', '')).zfill(6)
+                    name = str(row.get('name', ''))
+                    if not code or not name or name.startswith(('N', 'ST', '*ST')):
+                        continue
+                    if code.startswith('6'):
+                        exchange = 'SH'
+                    elif code.startswith('0') or code.startswith('3'):
+                        exchange = 'SZ'
+                    elif code.startswith('8') or code.startswith('4'):
+                        exchange = 'BJ'
+                    else:
+                        continue
+                    all_stocks.append({'code': code, 'name': name, 'exchange': exchange})
             except Exception as e:
-                logger.warning(f"获取沪市股票列表失败: {e}")
-
-            # 深市
-            try:
-                df_sz = ak.stock_info_sz_name_code(indicator="A股列表")
-                for _, row in df_sz.iterrows():
-                    code = str(row.get('A股代码', '')).zfill(6)
-                    name = str(row.get('A股简称', ''))
-                    if code and name and not name.startswith('N'):
-                        all_stocks.append({'code': code, 'name': name, 'exchange': 'SZ'})
-            except Exception as e:
-                logger.warning(f"获取深市股票列表失败: {e}")
+                logger.warning(f"stock_info_a_code_name 获取失败，尝试分板块获取: {e}")
+                # 降级：分板块获取
+                try:
+                    df_sh = ak.stock_info_sh_name_code(symbol="主板A股")
+                    for _, row in df_sh.iterrows():
+                        code = str(row.get('证券代码', '')).zfill(6)
+                        name = str(row.get('证券简称', ''))
+                        if code and name and not name.startswith('N'):
+                            all_stocks.append({'code': code, 'name': name, 'exchange': 'SH'})
+                except Exception as e2:
+                    logger.warning(f"获取沪市股票列表失败: {e2}")
+                try:
+                    df_sz = ak.stock_info_sz_name_code(indicator="A股列表")
+                    for _, row in df_sz.iterrows():
+                        code = str(row.get('A股代码', '')).zfill(6)
+                        name = str(row.get('A股简称', ''))
+                        if code and name and not name.startswith('N'):
+                            all_stocks.append({'code': code, 'name': name, 'exchange': 'SZ'})
+                except Exception as e2:
+                    logger.warning(f"获取深市股票列表失败: {e2}")
 
         except ImportError:
             # akshare 不可用，降级到 baostock
@@ -433,6 +459,12 @@ class DataService:
                 existing.name = item['name']
 
         self.db.commit()
+
+        # 同步行业信息（仅填充尚未归属行业的股票）
+        industry_count = self._sync_industry_info()
+        if industry_count > 0:
+            logger.info(f"行业信息同步完成: 更新了 {industry_count} 只股票的行业字段")
+
         return new_count
 
     @staticmethod
@@ -481,3 +513,62 @@ class DataService:
             bs.logout()
 
         return all_stocks
+
+    def _sync_industry_info(self, max_industries: int = 30) -> int:
+        """从akshare同步行业板块信息，更新股票的行业字段
+
+        通过 stock_board_industry_name_em 获取行业板块列表，
+        再通过 stock_board_industry_cons_em 获取每个行业的成分股，
+        将行业信息写入对应的股票记录（仅填充尚未归属行业的股票）。
+
+        为避免耗时过长，仅处理前 max_industries 个行业。
+        每处理完一个行业即提交一次，确保部分更新不丢失。
+
+        Args:
+            max_industries: 最多处理的行业数量，默认30
+
+        Returns:
+            更新了行业信息的股票数量
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            import akshare as ak
+        except ImportError:
+            logger.warning("akshare 未安装，跳过行业信息同步")
+            return 0
+
+        try:
+            df_industries = ak.stock_board_industry_name_em()
+        except Exception as e:
+            logger.warning(f"获取行业板块列表失败: {e}")
+            return 0
+
+        if df_industries.empty:
+            return 0
+
+        updated_count = 0
+        industry_col = '板块名称' if '板块名称' in df_industries.columns else df_industries.columns[1]
+
+        for _, ind_row in df_industries.head(max_industries).iterrows():
+            industry_name = str(ind_row.get(industry_col, '')).strip()
+            if not industry_name:
+                continue
+            try:
+                df_cons = ak.stock_board_industry_cons_em(symbol=industry_name)
+                code_col = '代码' if '代码' in df_cons.columns else df_cons.columns[1]
+                for _, cons_row in df_cons.iterrows():
+                    code = str(cons_row.get(code_col, '')).zfill(6)
+                    if not code:
+                        continue
+                    stock = self.db.query(Stock).filter(Stock.code == code).first()
+                    if stock and not stock.industry:
+                        stock.industry = industry_name
+                        updated_count += 1
+                self.db.commit()
+            except Exception as e:
+                logger.warning(f"获取行业 '{industry_name}' 成分股失败: {e}")
+                continue
+
+        return updated_count

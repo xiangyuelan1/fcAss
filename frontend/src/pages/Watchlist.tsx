@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Tabs,
   Card,
@@ -42,12 +42,14 @@ import {
   ExperimentOutlined,
   BulbOutlined,
   RobotOutlined,
+  HeartOutlined,
+  ShareAltOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { watchlistApi, dataApi, featureApi } from '@/services/api'
-import { Indicator, Stock } from '@/types'
+import { Indicator, Stock, CustomIndicator } from '@/types'
 
-const { Option } = Select
+const { Option, OptGroup } = Select
 
 const EXCHANGE_OPTIONS = [
   { value: '', label: '全部交易所' },
@@ -157,11 +159,37 @@ const WatchlistPage: React.FC = () => {
   const [previewDateRange, setPreviewDateRange] = useState<{ start: string; end: string } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
 
+  const [customIndicators, setCustomIndicators] = useState<CustomIndicator[]>([])
+  const [createIndicatorVisible, setCreateIndicatorVisible] = useState(false)
+  const [newIndicator, setNewIndicator] = useState({
+    name: '',
+    formula: '',
+    description: '',
+    category: '自定义',
+  })
+
+  const hasAutoExpanded = useRef(false)
+
   const fetchWatchlists = useCallback(async () => {
     setWlLoading(true)
     try {
       const data: any = await watchlistApi.getWatchlists()
       setWatchlists(data)
+      if (data.length > 0 && !hasAutoExpanded.current) {
+        hasAutoExpanded.current = true
+        const first = data[0]
+        setDetailId(first.id)
+        setDetailName(first.name)
+        setDetailLoading(true)
+        try {
+          const stockData: any = await watchlistApi.getStocks(first.id)
+          setDetailStocks(stockData)
+        } catch {
+          // 首次自动展开获取股票列表失败时静默处理，不影响主流程
+        } finally {
+          setDetailLoading(false)
+        }
+      }
     } catch {
       message.error('获取自选表列表失败')
     } finally {
@@ -238,6 +266,15 @@ const WatchlistPage: React.FC = () => {
     }
   }, [])
 
+  const fetchCustomIndicators = useCallback(async () => {
+    try {
+      const data: any = await featureApi.getCustomIndicators()
+      setCustomIndicators(data)
+    } catch {
+      message.error('获取自定义指标失败')
+    }
+  }, [])
+
   useEffect(() => {
     fetchWatchlists()
     fetchAutoPredictPool()
@@ -255,8 +292,9 @@ const WatchlistPage: React.FC = () => {
       fetchIndicators()
       fetchFeStocks()
       fetchCategories()
+      fetchCustomIndicators()
     }
-  }, [activeTab, fetchIndicators, fetchFeStocks, fetchCategories])
+  }, [activeTab, fetchIndicators, fetchFeStocks, fetchCategories, fetchCustomIndicators])
 
   const handleCreateWatchlist = async () => {
     if (!createName.trim()) {
@@ -568,8 +606,71 @@ const WatchlistPage: React.FC = () => {
       '波动': 'purple',
       '成交量': 'green',
       '价格': 'red',
+      '自定义': 'purple',
     }
     return colors[category] || 'default'
+  }
+
+  const handleCreateIndicator = async () => {
+    if (!newIndicator.name.trim()) {
+      message.error('请输入指标名称')
+      return
+    }
+    if (!newIndicator.formula.trim()) {
+      message.error('请输入计算公式')
+      return
+    }
+    try {
+      await featureApi.createCustomIndicator(newIndicator)
+      message.success('自定义指标创建成功')
+      setCreateIndicatorVisible(false)
+      setNewIndicator({ name: '', formula: '', description: '', category: '自定义' })
+      fetchCustomIndicators()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '创建失败')
+    }
+  }
+
+  const handleUseCustomIndicator = (item: CustomIndicator) => {
+    if (!selectedIndicators.includes(item.key)) {
+      const newSelected = [...selectedIndicators, item.key]
+      setSelectedIndicators(newSelected)
+      message.success(`已添加自定义指标: ${item.name}`)
+    } else {
+      message.info('该指标已在选择列表中')
+    }
+  }
+
+  const handlePublishIndicator = async (id: number) => {
+    try {
+      await featureApi.publishCustomIndicator(id)
+      message.success('指标已发布到社区')
+      fetchCustomIndicators()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '发布失败')
+    }
+  }
+
+  const handleLikeIndicator = async (id: number) => {
+    try {
+      await featureApi.likeCustomIndicator(id)
+      fetchCustomIndicators()
+    } catch {
+      message.error('点赞失败')
+    }
+  }
+
+  const handleDeleteIndicator = async (id: number) => {
+    try {
+      await featureApi.deleteCustomIndicator(id)
+      message.success('指标已删除')
+      fetchCustomIndicators()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '删除失败')
+    }
   }
 
   const getSelectedCategories = () => {
@@ -993,18 +1094,33 @@ const WatchlistPage: React.FC = () => {
             loading={poolSearching}
           />
           <Select
-            placeholder="筛选行业"
+            placeholder="筛选行业/板块"
             allowClear
-            style={{ width: 180 }}
+            style={{ width: 200 }}
             loading={industriesLoading}
             value={poolIndustry}
             onChange={(value) => { setPoolIndustry(value); setPoolPage(1) }}
             showSearch
-            optionFilterProp="children"
+            filterOption={(input, option) =>
+              (option?.value as string)?.toLowerCase().includes(input.toLowerCase())
+            }
           >
-            {industries.map((ind) => (
-              <Option key={ind} value={ind}>{ind}</Option>
-            ))}
+            {Object.entries(
+              industries.reduce((groups, ind) => {
+                const key = ind.charAt(0)
+                if (!groups[key]) groups[key] = []
+                groups[key].push(ind)
+                return groups
+              }, {} as Record<string, string[]>)
+            )
+              .sort(([a], [b]) => a.localeCompare(b, 'zh-CN'))
+              .map(([key, items]) => (
+                <OptGroup key={key} label={key}>
+                  {items.map((ind) => (
+                    <Option key={ind} value={ind}>{ind}</Option>
+                  ))}
+                </OptGroup>
+              ))}
           </Select>
           <Select
             style={{ width: 140 }}
@@ -1317,6 +1433,66 @@ const WatchlistPage: React.FC = () => {
             />
           </Card>
 
+          <Card
+            title={
+              <Space>
+                <ExperimentOutlined />
+                <span>自定义指标</span>
+              </Space>
+            }
+            size="small"
+            style={{ marginTop: 16 }}
+            extra={
+              <Button size="small" icon={<PlusOutlined />} onClick={() => setCreateIndicatorVisible(true)}>
+                创建指标
+              </Button>
+            }
+          >
+            {customIndicators.length === 0 ? (
+              <Empty description="暂无自定义指标" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+                <Button size="small" type="primary" onClick={() => setCreateIndicatorVisible(true)}>
+                  创建第一个指标
+                </Button>
+              </Empty>
+            ) : (
+              <List
+                size="small"
+                dataSource={customIndicators}
+                renderItem={(item) => (
+                  <List.Item
+                    actions={[
+                      <Button key="use" size="small" type="link" onClick={() => handleUseCustomIndicator(item)}>使用</Button>,
+                      <Tooltip key="like" title="点赞">
+                        <Button size="small" type="link" icon={<HeartOutlined />} onClick={() => handleLikeIndicator(item.id)}>
+                          {item.likes_count}
+                        </Button>
+                      </Tooltip>,
+                      !item.is_published && (
+                        <Tooltip key="publish" title="发布到社区">
+                          <Button size="small" type="link" icon={<ShareAltOutlined />} onClick={() => handlePublishIndicator(item.id)}>发布</Button>
+                        </Tooltip>
+                      ),
+                      <Popconfirm key="delete" title="确定删除此指标？" onConfirm={() => handleDeleteIndicator(item.id)}>
+                        <Button size="small" type="link" danger icon={<DeleteOutlined />} />
+                      </Popconfirm>,
+                    ].filter(Boolean)}
+                  >
+                    <List.Item.Meta
+                      title={
+                        <span>
+                          {item.name}
+                          <Tag color={getCategoryColor(item.category)} style={{ marginLeft: 6 }}>{item.category}</Tag>
+                          {item.is_published && <Tag color="green" style={{ marginLeft: 2 }}>已发布</Tag>}
+                        </span>
+                      }
+                      description={item.description || item.formula}
+                    />
+                  </List.Item>
+                )}
+              />
+            )}
+          </Card>
+
           <Button
             type="primary"
             icon={<EyeOutlined />}
@@ -1525,6 +1701,64 @@ const WatchlistPage: React.FC = () => {
           },
         ]}
       />
+
+      <Modal
+        title="创建自定义指标"
+        open={createIndicatorVisible}
+        onOk={handleCreateIndicator}
+        onCancel={() => setCreateIndicatorVisible(false)}
+        okText="创建"
+        width={600}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontWeight: 600, display: 'block', marginBottom: 4 }}>
+            指标名称 <span style={{ color: '#f5222d' }}>*</span>
+          </label>
+          <Input
+            placeholder="例如：量价背离度"
+            value={newIndicator.name}
+            onChange={(e) => setNewIndicator({ ...newIndicator, name: e.target.value })}
+          />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontWeight: 600, display: 'block', marginBottom: 4 }}>
+            计算公式 <span style={{ color: '#f5222d' }}>*</span>
+          </label>
+          <Input.TextArea
+            placeholder={"使用 Python 表达式，可用变量：close, open, high, low, volume, returns\n例如：(close - close.rolling(20).mean()) / close.rolling(20).std()"}
+            rows={4}
+            value={newIndicator.formula}
+            onChange={(e) => setNewIndicator({ ...newIndicator, formula: e.target.value })}
+          />
+          <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+            可用变量：close, open, high, low, volume, returns, amount, change_pct
+          </div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontWeight: 600, display: 'block', marginBottom: 4 }}>描述</label>
+          <Input.TextArea
+            placeholder="描述这个指标的含义和用途"
+            rows={2}
+            value={newIndicator.description}
+            onChange={(e) => setNewIndicator({ ...newIndicator, description: e.target.value })}
+          />
+        </div>
+        <div>
+          <label style={{ fontWeight: 600, display: 'block', marginBottom: 4 }}>分类</label>
+          <Select
+            value={newIndicator.category}
+            onChange={(value) => setNewIndicator({ ...newIndicator, category: value })}
+            style={{ width: '100%' }}
+          >
+            <Option value="自定义">自定义</Option>
+            <Option value="趋势">趋势</Option>
+            <Option value="震荡">震荡</Option>
+            <Option value="波动">波动</Option>
+            <Option value="成交量">成交量</Option>
+            <Option value="价格">价格</Option>
+          </Select>
+        </div>
+      </Modal>
     </div>
   )
 }
