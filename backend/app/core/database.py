@@ -65,6 +65,7 @@ _MIGRATION_COLUMNS = {
         ("train_date_range", "JSON"),
         ("auto_retrain_daily", "BOOLEAN DEFAULT 0"),
         ("auto_predict_pool_daily", "BOOLEAN DEFAULT 0"),
+        ("feature_window", "INTEGER DEFAULT 5"),
     ],
     "community_models": [
         ("feature_config", "JSON"),

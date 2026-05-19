@@ -47,6 +47,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   FolderOutlined,
+  FieldTimeOutlined,
 } from '@ant-design/icons'
 import { modelApi, dataApi, featureApi, watchlistApi } from '@/services/api'
 import { ModelType, Indicator, Stock, ModelTemplate } from '@/types'
@@ -282,6 +283,7 @@ const ModelBuilder: React.FC = () => {
   const [indicatorParams, setIndicatorParams] = useState<Record<string, Record<string, any>>>({})
   const [target, setTarget] = useState('next_day_direction')
   const [gainTargetPct, setGainTargetPct] = useState(10)
+  const [featureWindow, setFeatureWindow] = useState(5)
   const [stockCodes, setStockCodes] = useState<string[]>([])
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
 
@@ -487,6 +489,7 @@ const ModelBuilder: React.FC = () => {
       setModelConfig(data.model_params || {})
       setSelectedIndicators(data.features || [])
       setIndicatorParams(data.feature_config || {})
+      setFeatureWindow(data.feature_window || 5)
       setTarget(data.target || 'next_day_direction')
       setStockCodes(data.stock_codes || [])
       setDateRange(
@@ -515,6 +518,7 @@ const ModelBuilder: React.FC = () => {
           model_params: modelConfig,
           features: selectedIndicators,
           feature_config: indicatorParams,
+          feature_window: selectedModelType === 'lstm' || selectedModelType === 'gru' ? undefined : featureWindow,
           target,
           target_config: target === 'time_to_gain_pct' ? { gain_target_pct: gainTargetPct } : {},
           stock_codes: stockCodes,
@@ -785,6 +789,53 @@ const ModelBuilder: React.FC = () => {
               ) : (
                 <Alert message="此模型无需额外参数配置" type="info" />
               )}
+            </Card>
+          )}
+
+          {selectedModelType && selectedModelType !== 'lstm' && selectedModelType !== 'gru' && (
+            <Card
+              title={<Space><FieldTimeOutlined /><span>特征窗口</span></Space>}
+              size="small"
+              style={{ marginTop: 16 }}
+            >
+              <div style={{ marginBottom: 12 }}>
+                <Alert
+                  message="特征窗口是什么？"
+                  description="窗口=1时，模型只看当天数据（截面模式），信息量少、预测不稳定。窗口>1时，模型同时参考近N天的特征变化趋势，能捕捉动量和反转信号，预测更可靠。建议设为5~10日。"
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <span style={{ fontSize: 13, color: '#666', whiteSpace: 'nowrap' }}>窗口天数</span>
+                <Slider
+                  min={1}
+                  max={30}
+                  value={featureWindow}
+                  onChange={setFeatureWindow}
+                  style={{ flex: 1 }}
+                  marks={{
+                    1: { label: '1日', style: { color: '#999' } },
+                    5: { label: '5日', style: { color: '#1890ff' } },
+                    10: { label: '10日' },
+                    20: { label: '20日' },
+                    30: { label: '30日' },
+                  }}
+                />
+                <InputNumber
+                  min={1}
+                  max={30}
+                  value={featureWindow}
+                  onChange={(v) => setFeatureWindow(v || 5)}
+                  style={{ width: 64 }}
+                />
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
+                {featureWindow === 1
+                  ? '⚠️ 单日截面模式：仅使用当天特征，预测可靠性较低'
+                  : `✅ 近${featureWindow}日窗口模式：模型将参考最近${featureWindow}天的特征变化，输入维度×${featureWindow}`}
+              </div>
             </Card>
           )}
         </div>

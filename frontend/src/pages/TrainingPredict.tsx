@@ -19,6 +19,7 @@ import {
   InputNumber,
   Tabs,
   Select,
+  AutoComplete,
   Alert,
   Spin,
   Collapse,
@@ -49,7 +50,7 @@ import {
   ShareAltOutlined,
 } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
-import { trainingApi, modelApi, backtestApi, predictionApi, dataApi } from '@/services/api'
+import { trainingApi, modelApi, backtestApi, predictionApi, dataApi, watchlistApi } from '@/services/api'
 import { TrainingTask, UserModel, BacktestResult, EquityPoint } from '@/types'
 import { PredictionResult, PredictionAnimation, ConfidenceBar, deriveConfidence, labelToDirection } from '@/components/PredictionFun'
 import { TrainingCompleteEffect } from '@/components/TrainingCompleteEffect'
@@ -418,6 +419,7 @@ const TrainingPredict: React.FC = () => {
   const [realtimeQuote, setRealtimeQuote] = useState<RealtimeQuote | null>(null)
   const [loadingQuote, setLoadingQuote] = useState(false)
   const [sharingPrediction, setSharingPrediction] = useState(false)
+  const [watchlistStocks, setWatchlistStocks] = useState<{ code: string; name: string }[]>([])
 
   const [backtestResults, setBacktestResults] = useState<BacktestResult[]>([])
   const [backtestListLoading, setBacktestListLoading] = useState(false)
@@ -454,6 +456,7 @@ const TrainingPredict: React.FC = () => {
   useEffect(() => {
     if (selectedTaskId) {
       fetchPredictableStocks(selectedTaskId)
+      fetchWatchlistStocks()
     }
   }, [selectedTaskId])
 
@@ -579,6 +582,21 @@ const TrainingPredict: React.FC = () => {
     } catch (error) {
       message.error('获取可预测股票失败')
     }
+  }
+
+  const fetchWatchlistStocks = async () => {
+    try {
+      const data: any = await watchlistApi.getWatchlists()
+      const lists = data?.items || (Array.isArray(data) ? data : [])
+      if (lists.length > 0) {
+        const firstList = lists[0]
+        const items = firstList.items || []
+        setWatchlistStocks(items.map((item: any) => ({
+          code: item.stock_code,
+          name: item.stock_name || item.stock_code,
+        })))
+      }
+    } catch {}
   }
 
   const fetchLogs = async (taskId: number) => {
@@ -838,6 +856,35 @@ const TrainingPredict: React.FC = () => {
     }
   }
 
+  const handleWatchlistBatchPredict = async () => {
+    if (!selectedTaskId || watchlistStocks.length === 0) return
+    setBatchPredicting(true)
+    setBatchResults([])
+    try {
+      const codes = watchlistStocks.map(s => s.code)
+      const data: any = await predictionApi.batchPredict({
+        task_id: selectedTaskId,
+        stock_codes: codes,
+      })
+      const predictions = data.predictions || []
+      setBatchResults(predictions)
+      predictions.forEach((p: any) => {
+        if (!p.error) {
+          addRecord({ ...p, predict_date: new Date().toISOString().slice(0, 10) }, selectedTaskId)
+        }
+      })
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      if (typeof detail === 'string') {
+        message.error(detail)
+      } else {
+        message.error('批量预测失败')
+      }
+    } finally {
+      setBatchPredicting(false)
+    }
+  }
+
   const handleSharePrediction = async (record: PredictionRecord) => {
     setSharingPrediction(true)
     try {
@@ -985,33 +1032,38 @@ const TrainingPredict: React.FC = () => {
           {status === 'running' && progressMap[record.id] && (() => {
             const progress = progressMap[record.id]
             const percent = progress.progress || 0
-            const elapsed = getElapsedTime(record)
+            const elapsed = progress.elapsed_seconds || getElapsedTime(record)
             const remaining = getEstimatedRemaining(percent, elapsed)
             const stageText = stageMap[progress.stage] || (progress.stage ? progress.stage : '处理中')
             const model = models[record.model_id]
             const isDeepLearning = model && ['lstm', 'gru'].includes(model.model_type.toLowerCase())
+            const isDataPrep = progress.stage === 'data_preparation'
+            const dataPrepProgress = progress.data_preparation_progress
+
             return (
-              <div style={{ marginTop: 8 }}>
+              <div style={{ marginTop: 8, padding: '8px 12px', background: '#f6f8fa', borderRadius: 6, border: '1px solid #e8e8e8' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 500, color: '#1890ff' }}>
+                    {isDataPrep ? `📥 ${stageText}` : `🧠 ${stageText}`}
+                  </span>
+                  <span style={{ fontSize: 12, color: '#666' }}>
+                    ⏱ 已用 {formatDuration(elapsed)}
+                    {remaining !== null && remaining > 0 && (
+                      <> · 预计剩余 <span style={{ color: '#f5222d', fontWeight: 500 }}>{formatDuration(remaining)}</span></>
+                    )}
+                  </span>
+                </div>
                 <Progress
-                  percent={percent}
+                  percent={isDataPrep ? (dataPrepProgress || 0) : percent}
                   size="small"
-                  style={{ width: 150 }}
+                  strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
                   status="active"
                 />
-                <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
-                  {stageText}
-                  {' · '}
-                  已用 {formatDuration(elapsed)}
-                  {remaining !== null && remaining > 0 && (
-                    <> · 预计剩余 {formatDuration(remaining)}</>
-                  )}
-                </div>
                 {isDeepLearning && progress.epoch && (
-                  <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>
-                    Epoch {progress.epoch}
-                    {progress.total_epochs ? ` / ${progress.total_epochs}` : ''}
+                  <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+                    Epoch {progress.epoch}{progress.total_epochs ? ` / ${progress.total_epochs}` : ''}
                     {progress.train_loss != null && ` | Loss: ${progress.train_loss.toFixed(4)}`}
-                    {progress.val_loss != null && ` | Val Loss: ${progress.val_loss.toFixed(4)}`}
+                    {progress.val_loss != null && ` | Val: ${progress.val_loss.toFixed(4)}`}
                   </div>
                 )}
               </div>
@@ -1636,31 +1688,20 @@ const TrainingPredict: React.FC = () => {
             </Col>
             <Col xs={24} md={12}>
               <div style={{ marginBottom: 8, fontWeight: 500 }}>预测股票</div>
-              <Select
-                placeholder="选择或输入股票代码"
+              <AutoComplete
+                placeholder="选择或输入股票代码（如 000858）"
                 value={selectedStock}
-                onChange={setSelectedStock}
+                onChange={(value) => setSelectedStock(value)}
                 style={{ width: '100%' }}
-                showSearch
-                allowClear
-                filterOption={(input, option) =>
-                  (option?.children as unknown as string)?.toLowerCase().includes(input.toLowerCase()) ?? false
+                options={predictableStocks.map((stock) => ({
+                  value: stock.code,
+                  label: `${stock.code} - ${stock.name}`,
+                }))}
+                filterOption={(inputValue, option) =>
+                  option!.value.toLowerCase().includes(inputValue.toLowerCase()) ||
+                  option!.label.toLowerCase().includes(inputValue.toLowerCase())
                 }
-                popupRender={(menu) => (
-                  <>
-                    {menu}
-                    <div style={{ padding: '8px 12px', borderTop: '1px solid #f0f0f0', color: '#999', fontSize: 12 }}>
-                      可输入任意A股代码进行预测（如 000858），不仅限于训练股票
-                    </div>
-                  </>
-                )}
-              >
-                {predictableStocks.map((stock) => (
-                  <Select.Option key={stock.code} value={stock.code}>
-                    {stock.code} - {stock.name}
-                  </Select.Option>
-                ))}
-              </Select>
+              />
             </Col>
           </Row>
 
@@ -1701,6 +1742,15 @@ const TrainingPredict: React.FC = () => {
               size="large"
             >
               批量预测所有股票
+            </Button>
+            <Button
+              icon={<StockOutlined />}
+              loading={batchPredicting}
+              onClick={handleWatchlistBatchPredict}
+              disabled={!selectedTaskId || watchlistStocks.length === 0}
+              size="large"
+            >
+              从自选股批量预测 ({watchlistStocks.length})
             </Button>
           </div>
         </Card>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Row, Col, Card, Statistic, List, Tag, Button, Steps, Alert, message, Radio, Avatar, Space, Divider, Collapse, Switch } from 'antd'
+import { Row, Col, Card, Statistic, List, Tag, Button, Steps, Alert, message, Divider, Collapse, Switch } from 'antd'
 import {
   DatabaseOutlined,
   RobotOutlined,
@@ -10,24 +10,16 @@ import {
   CheckCircleOutlined,
   SyncOutlined,
   WarningOutlined,
-  TrophyOutlined,
   RiseOutlined,
   FallOutlined,
   MinusOutlined,
   QuestionCircleOutlined,
-  GlobalOutlined,
-  FireOutlined,
-  StarOutlined,
-  CopyOutlined,
-  UserOutlined,
-  BulbOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { dataApi, modelApi, trainingApi, backtestApi, pointsApi, communityApi, predictionApi, authApi } from '@/services/api'
-import { UserModel, TrainingTask, DailyChallenge, PredictionShareItem } from '@/types'
+import { dataApi, modelApi, trainingApi, backtestApi, predictionApi, authApi } from '@/services/api'
+import { UserModel, TrainingTask, PredictionShareItem } from '@/types'
 import { useAuthStore } from '@/store'
 import OnboardingGuide, { isOnboardingCompleted } from '@/components/OnboardingGuide'
-import DailyGuess from '@/components/DailyGuess'
 import MascotBull from '@/components/MascotBull'
 
 interface StaleModel {
@@ -38,33 +30,6 @@ interface StaleModel {
   trained_at: string
   stale_stocks: { code: string; latest_data_date: string; trained_at: string }[]
   new_data_count: number
-}
-
-interface CommunitySignal {
-  id: number
-  stock_code: string
-  stock_name?: string
-  direction: string
-  confidence: number
-  author?: { username: string }
-  created_at?: string
-}
-
-interface CommunityModelItem {
-  id: number
-  name: string
-  model_type: string
-  description?: string
-  likes_count: number
-  clones_count: number
-  author?: { username: string }
-}
-
-interface LeaderboardItem {
-  user_id: number
-  username: string
-  total_points: number
-  level: number
 }
 
 const Dashboard: React.FC = () => {
@@ -81,19 +46,11 @@ const Dashboard: React.FC = () => {
   const [recentTasks, setRecentTasks] = useState<TrainingTask[]>([])
   const [staleModels, setStaleModels] = useState<StaleModel[]>([])
   const [syncing, setSyncing] = useState(false)
-  const [dailyChallenge, setDailyChallenge] = useState<DailyChallenge | null>(null)
-  const [challengeDirection, setChallengeDirection] = useState<string>('up')
-  const [submittingChallenge, setSubmittingChallenge] = useState(false)
   const [onboardingVisible, setOnboardingVisible] = useState(false)
-
-  const [hotSignals, setHotSignals] = useState<CommunitySignal[]>([])
-  const [popularModels, setPopularModels] = useState<CommunityModelItem[]>([])
-  const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([])
   const [myPredictions, setMyPredictions] = useState<PredictionShareItem[]>([])
 
   useEffect(() => {
     fetchDashboardData()
-    fetchCommunityData()
     fetchMyPredictions()
   }, [])
 
@@ -103,23 +60,6 @@ const Dashboard: React.FC = () => {
       return () => clearTimeout(timer)
     }
   }, [stats.modelCount, stats.stockCount])
-
-  const fetchCommunityData = async () => {
-    try {
-      const signalsRes: any = await communityApi.getSignals({ page: 1, page_size: 5 })
-      setHotSignals(signalsRes.items || signalsRes || [])
-    } catch {}
-
-    try {
-      const modelsRes: any = await communityApi.getModels({ sort: 'likes', page: 1, page_size: 4 })
-      setPopularModels(modelsRes.items || modelsRes || [])
-    } catch {}
-
-    try {
-      const lbRes: any = await pointsApi.getLeaderboard({ limit: 5 })
-      setLeaderboard(lbRes.leaderboard || lbRes || [])
-    } catch {}
-  }
 
   const fetchMyPredictions = async () => {
     try {
@@ -160,14 +100,7 @@ const Dashboard: React.FC = () => {
     try {
       const staleRes: any = await dataApi.checkStaleData()
       setStaleModels(staleRes.stale_models || [])
-    } catch {
-    }
-
-    try {
-      const challengeRes: any = await pointsApi.getDailyChallenge()
-      setDailyChallenge(challengeRes)
-    } catch {
-    }
+    } catch {}
   }
 
   const handleBatchSync = async () => {
@@ -212,19 +145,7 @@ const Dashboard: React.FC = () => {
     return texts[status] || status
   }
 
-  const handleSubmitChallenge = async () => {
-    setSubmittingChallenge(true)
-    try {
-      await pointsApi.submitDailyChallenge({ direction: challengeDirection, confidence: 0.7 })
-      message.success('挑战提交成功！+5积分，次日自动评估')
-      setDailyChallenge(prev => prev ? { ...prev, completed: true, direction: challengeDirection } : null)
-    } catch (error: any) {
-      message.error(error?.response?.data?.detail || '提交失败')
-    } finally {
-      setSubmittingChallenge(false)
-    }
-  }
-
+  // 预测方向信息映射，用于"我的预测结果"展示
   const getDirectionInfo = (direction: string) => {
     if (direction === 'up') return { label: '看涨', color: 'red', icon: <RiseOutlined /> }
     if (direction === 'down') return { label: '看跌', color: 'green', icon: <FallOutlined /> }
@@ -249,268 +170,23 @@ const Dashboard: React.FC = () => {
 
   return (
     <div>
+      {/* 标题区 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <MascotBull mood="chill" size="small" />
           <h1 className="page-title" style={{ marginBottom: 0 }}>
-            A股预测平台
+            我的工作台
           </h1>
         </div>
-        <Button
-          type="link"
-          icon={<QuestionCircleOutlined />}
-          onClick={() => setOnboardingVisible(true)}
-          style={{ fontSize: 14 }}
-        >
+        <Button type="link" icon={<QuestionCircleOutlined />} onClick={() => setOnboardingVisible(true)}>
           新手引导
         </Button>
       </div>
       <p className="page-description" style={{ marginBottom: 20 }}>
-        看看大家都在预测什么，参与每日挑战，或创建自己的预测模型
+        管理你的模型、查看预测结果、追踪训练进度
       </p>
 
-      {/* ===== 每日一猜 ===== */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
-        <Col xs={24} lg={10}>
-          <DailyGuess compact />
-        </Col>
-        <Col xs={24} lg={14}>
-          <Card
-            title={
-              <span>
-                <FireOutlined style={{ color: '#ff4d4f', marginRight: 8 }} />
-                社区热门预测
-              </span>
-            }
-            extra={<Button type="link" onClick={() => navigate('/community')}>查看更多 <ArrowRightOutlined /></Button>}
-            style={{ height: '100%' }}
-            styles={{ body: { paddingTop: 12 } }}
-          >
-            {hotSignals.length > 0 ? (
-              <List
-                dataSource={hotSignals}
-                split
-                renderItem={(signal) => {
-                  const dirInfo = getDirectionInfo(signal.direction)
-                  return (
-                    <List.Item style={{ padding: '8px 0' }}>
-                      <List.Item.Meta
-                        avatar={
-                          <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#1890ff' }} />
-                        }
-                        title={
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <Tag color="blue">{signal.stock_code}</Tag>
-                            <Tag color={dirInfo.color}>{dirInfo.icon} {dirInfo.label}</Tag>
-                            <span style={{ fontSize: 12, color: '#999' }}>
-                              置信度 {Math.round((signal.confidence || 0) * 100)}%
-                            </span>
-                          </div>
-                        }
-                        description={
-                          <span style={{ fontSize: 12, color: '#999' }}>
-                            {signal.author?.username || '匿名'} · {signal.created_at?.slice(0, 10)}
-                          </span>
-                        }
-                      />
-                    </List.Item>
-                  )
-                }}
-              />
-            ) : (
-              <div style={{ textAlign: 'center', padding: '24px 0', color: '#999' }}>
-                <GlobalOutlined style={{ fontSize: 32, marginBottom: 8, display: 'block' }} />
-                暂无预测信号，成为第一个发布预测的人！
-              </div>
-            )}
-          </Card>
-        </Col>
-        <Col xs={24} lg={10}>
-          <Card
-            title={
-              <span>
-                <TrophyOutlined style={{ color: '#faad14', marginRight: 8 }} />
-                积分排行
-              </span>
-            }
-            extra={<Button type="link" onClick={() => navigate('/community/leaderboard')}>完整榜单 <ArrowRightOutlined /></Button>}
-            style={{ height: '100%' }}
-            styles={{ body: { paddingTop: 12 } }}
-          >
-            {leaderboard.length > 0 ? (
-              <List
-                dataSource={leaderboard}
-                split
-                renderItem={(item, idx) => (
-                  <List.Item style={{ padding: '8px 0' }}>
-                    <List.Item.Meta
-                      avatar={
-                        <Avatar
-                          size="small"
-                          style={{
-                            backgroundColor: idx === 0 ? '#ffd700' : idx === 1 ? '#c0c0c0' : idx === 2 ? '#cd7f32' : '#1890ff',
-                            fontSize: 12,
-                            fontWeight: 700,
-                          }}
-                        >
-                          {idx + 1}
-                        </Avatar>
-                      }
-                      title={
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span>{item.username}</span>
-                          <span style={{ fontSize: 13, color: '#faad14', fontWeight: 600 }}>{item.total_points}分</span>
-                        </div>
-                      }
-                      description={<span style={{ fontSize: 12, color: '#999' }}>Lv.{item.level}</span>}
-                    />
-                  </List.Item>
-                )}
-              />
-            ) : (
-              <div style={{ textAlign: 'center', padding: '24px 0', color: '#999' }}>
-                暂无排行数据
-              </div>
-            )}
-          </Card>
-        </Col>
-      </Row>
-
-      {/* ===== 每日挑战 + 热门模型 ===== */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
-        <Col xs={24} lg={12}>
-          {dailyChallenge && dailyChallenge.stock_code ? (
-            <Card
-              title={
-                <span>
-                  <TrophyOutlined style={{ color: '#faad14', marginRight: 8 }} />
-                  每日挑战
-                  <Tag color="gold" style={{ marginLeft: 8 }}>+5积分</Tag>
-                </span>
-              }
-            >
-              <Row gutter={[16, 16]} align="middle">
-                <Col xs={24} md={8}>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 14, color: '#999', marginBottom: 4 }}>今日挑战股票</div>
-                    <div style={{ fontSize: 22, fontWeight: 600 }}>{dailyChallenge.stock_name}</div>
-                    <Tag color="blue" style={{ marginTop: 4 }}>{dailyChallenge.stock_code}</Tag>
-                  </div>
-                </Col>
-                <Col xs={24} md={16}>
-                  {dailyChallenge.completed ? (
-                    <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                      <CheckCircleOutlined style={{ fontSize: 36, color: '#52c41a' }} />
-                      <div style={{ marginTop: 8, fontSize: 15 }}>今日挑战已提交</div>
-                      <div style={{ color: '#999', marginTop: 4 }}>
-                        预测方向：
-                        {dailyChallenge.direction === 'up' && <Tag color="red"><RiseOutlined /> 上涨</Tag>}
-                        {dailyChallenge.direction === 'down' && <Tag color="green"><FallOutlined /> 下跌</Tag>}
-                        {dailyChallenge.direction === 'flat' && <Tag><MinusOutlined /> 持平</Tag>}
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ textAlign: 'center' }}>
-                      <div style={{ marginBottom: 12, fontSize: 14 }}>
-                        预测 {dailyChallenge.stock_name} 明日走势：
-                      </div>
-                      <Radio.Group
-                        value={challengeDirection}
-                        onChange={(e) => setChallengeDirection(e.target.value)}
-                        size="large"
-                        style={{ marginBottom: 12 }}
-                      >
-                        <Radio.Button value="up"><RiseOutlined /> 上涨</Radio.Button>
-                        <Radio.Button value="down"><FallOutlined /> 下跌</Radio.Button>
-                        <Radio.Button value="flat"><MinusOutlined /> 持平</Radio.Button>
-                      </Radio.Group>
-                      <div>
-                        <Button type="primary" size="large" icon={<TrophyOutlined />} onClick={handleSubmitChallenge} loading={submittingChallenge}>
-                          提交预测
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </Col>
-              </Row>
-            </Card>
-          ) : (
-            <Card
-              title={
-                <span>
-                  <BulbOutlined style={{ color: '#faad14', marginRight: 8 }} />
-                  快速上手
-                </span>
-              }
-            >
-              <div style={{ textAlign: 'center', padding: '12px 0' }}>
-                <p style={{ fontSize: 15, marginBottom: 16 }}>三步开始你的AI预测之旅</p>
-                <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                  <Button type="primary" size="large" block icon={<CopyOutlined />} onClick={() => navigate('/community')}>
-                    浏览社区模型，一键克隆
-                  </Button>
-                  <Button size="large" block icon={<ThunderboltOutlined />} onClick={() => navigate('/models/build')}>
-                    使用模板快速创建模型
-                  </Button>
-                  <Button size="large" block icon={<DatabaseOutlined />} onClick={() => navigate('/data')}>
-                    获取股票数据
-                  </Button>
-                </Space>
-              </div>
-            </Card>
-          )}
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <span>
-                <StarOutlined style={{ color: '#faad14', marginRight: 8 }} />
-                热门模型
-              </span>
-            }
-            extra={<Button type="link" onClick={() => navigate('/community')}>模型广场 <ArrowRightOutlined /></Button>}
-            styles={{ body: { paddingTop: 12 } }}
-          >
-            {popularModels.length > 0 ? (
-              <List
-                dataSource={popularModels}
-                split
-                renderItem={(model) => (
-                  <List.Item
-                    style={{ padding: '8px 0', cursor: 'pointer' }}
-                    onClick={() => navigate(`/community/model/${model.id}`)}
-                  >
-                    <List.Item.Meta
-                      title={
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span>{model.name}</span>
-                          <Tag>{model.model_type?.toUpperCase()}</Tag>
-                        </div>
-                      }
-                      description={
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: 12, color: '#999' }}>{model.author?.username || '匿名'}</span>
-                          <Space size="middle" style={{ fontSize: 12, color: '#999' }}>
-                            <span><StarOutlined /> {model.likes_count}</span>
-                            <span><CopyOutlined /> {model.clones_count}</span>
-                          </Space>
-                        </div>
-                      }
-                    />
-                  </List.Item>
-                )}
-              />
-            ) : (
-              <div style={{ textAlign: 'center', padding: '24px 0', color: '#999' }}>
-                <RobotOutlined style={{ fontSize: 32, marginBottom: 8, display: 'block' }} />
-                暂无社区模型，成为第一个发布模型的人！
-              </div>
-            )}
-          </Card>
-        </Col>
-      </Row>
-
-      {/* ===== 数据过期警告 ===== */}
+      {/* 数据过期警告 */}
       {staleModels.length > 0 && (
         <Alert
           style={{ marginBottom: 20 }}
@@ -544,12 +220,51 @@ const Dashboard: React.FC = () => {
         />
       )}
 
-      {/* ===== 我的工作台 ===== */}
-      <Divider orientation="left" style={{ fontSize: 15, color: '#666' }}>
-        我的工作台
-      </Divider>
+      {/* 统计卡片 */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        <Col xs={24} sm={12} lg={6}>
+          <Card hoverable onClick={() => navigate('/data')} size="small">
+            <Statistic
+              title="股票数据"
+              value={stats.stockCount}
+              prefix={<DatabaseOutlined />}
+              valueStyle={{ color: '#1890ff', fontSize: 22 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card hoverable onClick={() => navigate('/models')} size="small">
+            <Statistic
+              title="我的模型"
+              value={stats.modelCount}
+              prefix={<RobotOutlined />}
+              valueStyle={{ color: '#52c41a', fontSize: 22 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card hoverable onClick={() => navigate('/train-predict')} size="small">
+            <Statistic
+              title="训练任务"
+              value={stats.taskCount}
+              prefix={<PlayCircleOutlined />}
+              valueStyle={{ color: '#faad14', fontSize: 22 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card hoverable onClick={() => navigate('/train-predict')} size="small">
+            <Statistic
+              title="可预测模型"
+              value={stats.completedTaskCount}
+              prefix={<ThunderboltOutlined />}
+              valueStyle={{ color: '#722ed1', fontSize: 22 }}
+            />
+          </Card>
+        </Col>
+      </Row>
 
-      {/* ===== 我的预测结果 ===== */}
+      {/* 我的预测结果 */}
       <Divider orientation="left" style={{ fontSize: 15, color: '#666' }}>
         我的预测结果
       </Divider>
@@ -678,49 +393,7 @@ const Dashboard: React.FC = () => {
         </div>
       </Card>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/data')} size="small">
-            <Statistic
-              title="股票数据"
-              value={stats.stockCount}
-              prefix={<DatabaseOutlined />}
-              valueStyle={{ color: '#1890ff', fontSize: 22 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/models')} size="small">
-            <Statistic
-              title="我的模型"
-              value={stats.modelCount}
-              prefix={<RobotOutlined />}
-              valueStyle={{ color: '#52c41a', fontSize: 22 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/train-predict')} size="small">
-            <Statistic
-              title="训练任务"
-              value={stats.taskCount}
-              prefix={<PlayCircleOutlined />}
-              valueStyle={{ color: '#faad14', fontSize: 22 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card hoverable onClick={() => navigate('/train-predict')} size="small">
-            <Statistic
-              title="可预测模型"
-              value={stats.completedTaskCount}
-              prefix={<ThunderboltOutlined />}
-              valueStyle={{ color: '#722ed1', fontSize: 22 }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
+      {/* 最近模型 + 最近任务 */}
       <Row gutter={[16, 16]} style={{ marginTop: 20 }}>
         <Col xs={24} lg={12}>
           <Card

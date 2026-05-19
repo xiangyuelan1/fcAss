@@ -481,9 +481,9 @@ async def predict_with_community_model(
     """使用社区模型进行预测（不需要克隆，直接使用训练好的权重）"""
     community_model, latest_task = _resolve_community_model_task(model_id, current_user, db)
 
-    # 加载模型检查点
+    # 加载模型检查点（同时获取feature_window）
     try:
-        model, metrics, input_size = ModelCheckpoint.load_checkpoint(latest_task.id)
+        model, metrics, input_size, feature_window = ModelCheckpoint.load_checkpoint(latest_task.id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="模型检查点不存在，原作者可能已删除训练文件")
     except ValueError as e:
@@ -520,11 +520,19 @@ async def predict_with_community_model(
     feature_cols = [col for col in df.columns if col not in exclude_cols]
     if not feature_cols:
         raise HTTPException(status_code=400, detail="无可用特征列")
-    if len(feature_cols) != input_size:
-        raise HTTPException(
-            status_code=400,
-            detail=f"特征列数({len(feature_cols)})与模型期望({input_size})不匹配",
-        )
+    # 维度校验：feature_window > 1 时，实际输入维度 = 特征列数 × 窗口天数
+    if feature_window > 1:
+        if len(feature_cols) * feature_window != input_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"特征列数({len(feature_cols)})×窗口({feature_window})={len(feature_cols)*feature_window}与模型期望({input_size})不匹配",
+            )
+    else:
+        if len(feature_cols) != input_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"特征列数({len(feature_cols)})与模型期望({input_size})不匹配",
+            )
 
     # 标准化
     df_features = df[feature_cols].copy()
@@ -532,7 +540,7 @@ async def predict_with_community_model(
 
     # 执行预测
     try:
-        prediction = _do_predict(model, community_model.model_type, community_model.model_config, df_features, input_size)
+        prediction = _do_predict(model, community_model.model_type, community_model.model_config, df_features, input_size, feature_window)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"预测执行失败: {str(e)}")
 

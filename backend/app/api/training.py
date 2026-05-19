@@ -122,6 +122,15 @@ async def create_training_task(
     if not current_user.is_admin and user_model.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权使用该模型创建训练任务")
 
+    running_count = db.query(TrainingTask).join(
+        UserTableModel, TrainingTask.model_id == UserTableModel.id
+    ).filter(
+        UserTableModel.user_id == current_user.id,
+        TrainingTask.status == 'running'
+    ).count()
+    if running_count >= 2:
+        raise HTTPException(status_code=429, detail="同时最多允许2个训练任务，请等待当前任务完成后再发起新训练")
+
     service = TrainingService(db)
 
     task = service.create_task(
@@ -310,9 +319,12 @@ async def training_progress_stream(
                         'stage': current_progress.get('stage', task_obj.status),
                         'progress': current_progress.get('progress', 0),
                         'epoch': current_progress.get('epoch'),
+                        'total_epochs': current_progress.get('total_epochs'),
                         'train_loss': current_progress.get('train_loss'),
                         'val_loss': current_progress.get('val_loss'),
                         'status': task_obj.status,
+                        'start_time': current_progress.get('start_time'),
+                        'elapsed_seconds': current_progress.get('elapsed_seconds'),
                     }, ensure_ascii=False))
 
                 if task_obj.status in ['completed', 'failed', 'cancelled']:

@@ -31,25 +31,25 @@ const PK_MODE_MAP: Record<string, { label: string; color: string; icon: React.Re
     label: '涨跌方向',
     color: 'blue',
     icon: <SwapOutlined />,
-    desc: '预测指定日期股票涨跌方向，方向正确者获胜',
+    desc: '预测指定日期股票涨跌方向，方向正确者获胜。系统自动对比次日实际涨跌。',
   },
   multi_price: {
     label: '多维价格',
     color: 'green',
     icon: <LineChartOutlined />,
-    desc: '预测开盘价、收盘价、最高价、最低价，综合误差最小者获胜',
+    desc: '预测OHLC四价，综合误差最小者获胜。误差 = |预测值-实际值|/实际值 的均值。',
   },
   trend_5d: {
     label: '5日趋势',
     color: 'orange',
     icon: <ThunderboltOutlined />,
-    desc: '预测未来5日价格走势，趋势吻合度最高者获胜',
+    desc: '预测未来5日走势，趋势吻合度最高者获胜。对比5日累计涨跌幅。',
   },
   custom: {
     label: '自定义',
     color: 'purple',
     icon: <SettingOutlined />,
-    desc: '自定义PK规则和评判标准，由发起者设定',
+    desc: '自定义PK规则和评判标准。发起者设定评判方式，双方同意后生效。',
   },
 }
 
@@ -411,9 +411,21 @@ const PKArena: React.FC = () => {
           <Form.Item
             name="stock_code"
             label="PK股票代码"
-            rules={[{ required: true, message: '请输入股票代码' }]}
+            rules={[{ required: true, message: '请输入股票代码或点击随机选股' }]}
           >
-            <Input placeholder="例如: 000001" />
+            <Input
+              placeholder="输入股票代码，如 000001"
+              addonAfter={
+                <Button
+                  type="link"
+                  size="small"
+                  onClick={() => form.setFieldValue('stock_code', 'random')}
+                  style={{ padding: 0, height: 'auto', lineHeight: 1 }}
+                >
+                  🎲 随机
+                </Button>
+              }
+            />
           </Form.Item>
           <Form.Item
             name="pk_mode"

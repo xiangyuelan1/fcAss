@@ -43,6 +43,7 @@ class ModelConfigRequest(BaseModel):
     model_params: Optional[Dict[str, Any]] = Field(default_factory=dict, description="模型配置参数")
     features: List[str] = Field(..., description="特征列表")
     feature_config: Optional[Dict[str, Any]] = Field(default_factory=dict, description="特征工程配置")
+    feature_window: Optional[int] = Field(None, description="特征窗口天数(1=单日截面,N=近N日展平)")
     target: str = Field(..., description="预测目标")
     target_config: Optional[Dict[str, Any]] = Field(default_factory=dict, description="目标配置")
     stock_codes: List[str] = Field(..., description="训练股票列表")
@@ -502,6 +503,7 @@ async def create_model(
         model_config=model_params,
         features=request.config.features,
         feature_config=request.config.feature_config,
+        feature_window=request.config.feature_window,
         target=request.config.target,
         target_config=request.config.target_config,
         stock_codes=request.config.stock_codes,
@@ -551,6 +553,7 @@ async def update_model(
             'model_config': request.config.model_params,
             'features': request.config.features,
             'feature_config': request.config.feature_config,
+            'feature_window': request.config.feature_window if request.config.feature_window is not None else 5,
             'target': request.config.target,
             'target_config': request.config.target_config,
             'stock_codes': request.config.stock_codes,
@@ -600,6 +603,7 @@ async def get_model_config(
         "model_params": model.model_config,
         "features": model.features,
         "feature_config": model.feature_config,
+        "feature_window": model.feature_window if model.feature_window is not None else 5,
         "target": model.target,
         "target_config": model.target_config,
         "stock_codes": model.stock_codes,

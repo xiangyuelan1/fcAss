@@ -5,7 +5,7 @@
 1. today 端点被调用时，自动为当天生成一只猜测股票（如尚未生成）
 2. 同时尝试补全昨日记录的 actual_close（盘后自动更新）
 3. 用户在 15:00 前可投票看涨/看跌，每人每天仅一次
-4. history 端点返回最近 7 天记录，含投票统计与结果
+4. history 端点返回最近 30 天记录，含投票统计与结果
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -292,13 +292,13 @@ async def get_guess_history(
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """获取最近 7 天的历史记录（含结果和用户是否猜对）"""
+    """获取最近 30 天的历史记录（含结果和用户是否猜对）"""
     today = date.today()
-    seven_days_ago = today - timedelta(days=7)
+    thirty_days_ago = today - timedelta(days=30)
 
     guess_stocks = (
         db.query(DailyGuessStock)
-        .filter(DailyGuessStock.date >= seven_days_ago, DailyGuessStock.date < today)
+        .filter(DailyGuessStock.date >= thirty_days_ago, DailyGuessStock.date < today)
         .order_by(desc(DailyGuessStock.date))
         .all()
     )

@@ -227,6 +227,7 @@ class ModelService:
         user_id: Optional[int] = None,
         description: Optional[str] = None,
         feature_config: Optional[Dict[str, Any]] = None,
+        feature_window: Optional[int] = None,
         target_config: Optional[Dict[str, Any]] = None,
         train_date_range: Optional[Dict[str, str]] = None
     ) -> UserModel:
@@ -243,6 +244,7 @@ class ModelService:
             model_config=model_config,
             features=features,
             feature_config=feature_config or {},
+            feature_window=feature_window if feature_window is not None else 5,
             target=target,
             target_config=target_config or {},
             stock_codes=stock_codes,

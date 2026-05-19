@@ -8,7 +8,8 @@ from app.auth import get_current_active_user
 from app.models.user import User as UserModel
 from app.models.community import PKChallenge, CommunityModel, UserPoints, PointTransaction
 from app.models.user_model import UserModel as UserORMModel
-from app.models.stock import StockPrice
+from app.models.stock import Stock, StockPrice
+import random
 from app.models.training import TrainingTask
 from app.api.community import ensure_user_points, add_points
 from sqlalchemy import func, desc
@@ -49,6 +50,19 @@ async def create_challenge(
     valid_modes = ("direction", "multi_price", "trend_5d", "custom")
     if request.pk_mode not in valid_modes:
         raise HTTPException(status_code=400, detail=f"pk_mode 必须为 {'/'.join(valid_modes)}")
+
+    if not request.stock_code or request.stock_code == "random":
+        stocks_with_prices = (
+            db.query(Stock.code, Stock.name)
+            .join(StockPrice, Stock.code == StockPrice.stock_code)
+            .group_by(Stock.code, Stock.name)
+            .having(func.count(StockPrice.id) > 20)
+            .all()
+        )
+        if not stocks_with_prices:
+            raise HTTPException(status_code=400, detail="暂无可用股票进行PK")
+        chosen = random.choice(stocks_with_prices)
+        request.stock_code = chosen.code
 
     prediction_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 

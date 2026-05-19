@@ -94,7 +94,7 @@ async def predict(
 
     # 加载模型
     try:
-        model, metrics, input_size = ModelCheckpoint.load_checkpoint(task.id)
+        model, metrics, input_size, feature_window = ModelCheckpoint.load_checkpoint(task.id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="模型检查点不存在，请先完成模型训练")
     except ValueError as e:
@@ -126,13 +126,6 @@ async def predict(
     if not feature_cols:
         raise HTTPException(status_code=400, detail="无可用特征列")
 
-    if len(feature_cols) != input_size:
-        raise HTTPException(
-            status_code=400,
-            detail=f"特征列数({len(feature_cols)})与模型期望({input_size})不匹配，请确保使用相同配置"
-        )
-
-    # 标准化（使用全量数据的统计量）
     df_features = df[feature_cols].copy()
     df_features = (df_features - df_features.mean()) / df_features.std()
 
@@ -140,8 +133,28 @@ async def predict(
     model_config = user_model.model_config or {}
     target = user_model.target
 
+    if model_type in ['lstm', 'gru']:
+        expected_feat_dim = input_size
+    elif feature_window > 1:
+        expected_feat_dim = input_size // feature_window
+    else:
+        expected_feat_dim = input_size
+
+    if feature_window <= 1 and model_type not in ['lstm', 'gru']:
+        if len(feature_cols) != input_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"特征列数({len(feature_cols)})与模型期望({input_size})不匹配，请确保使用相同配置"
+            )
+    elif feature_window > 1:
+        if len(feature_cols) * feature_window != input_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"特征列数({len(feature_cols)})×窗口({feature_window})={len(feature_cols)*feature_window}与模型期望({input_size})不匹配，请确保使用相同配置"
+            )
+
     try:
-        prediction = _do_predict(model, model_type, model_config, df_features, input_size)
+        prediction = _do_predict(model, model_type, model_config, df_features, input_size, feature_window)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"预测执行失败: {str(e)}")
 
@@ -180,6 +193,49 @@ async def predict(
     predict_date = (datetime.now() + timedelta(days=request.days)).strftime('%Y-%m-%d')
 
     multi_features = _compute_multi_features(prediction, target, df, latest_close)
+
+    # 自动保存预测结果到数据库（is_published=False，非主动发布）
+    try:
+        stock_info = data_service.get_stock_by_code(request.stock_code)
+        stock_name = stock_info.name if stock_info else None
+        share = PredictionShare(
+            user_id=current_user.id,
+            task_id=request.task_id,
+            model_id=user_model.id if user_model else None,
+            model_name=user_model.name if user_model else None,
+            model_type=user_model.model_type if user_model else None,
+            stock_code=request.stock_code,
+            stock_name=stock_name,
+            target_type=target,
+            direction=prediction_label,
+            prediction_value=prediction,
+            confidence=confidence,
+            predicted_change_pct=predicted_change_pct,
+            predicted_price=predicted_price,
+            prediction_data={
+                'price_range_low': price_range_low,
+                'price_range_high': price_range_high,
+                'predicted_volatility': multi_features.get('predicted_volatility'),
+                'predicted_volume_change': multi_features.get('predicted_volume_change'),
+                'probability_up': multi_features.get('probability_up'),
+                'probability_down': multi_features.get('probability_down'),
+                'daily_avg_change_pct': multi_features.get('daily_avg_change_pct'),
+                'predicted_trend_days': multi_features.get('predicted_trend_days'),
+                'predicted_trend_pct': multi_features.get('predicted_trend_pct'),
+                'trend_direction': multi_features.get('trend_direction'),
+                'predicted_weeks': multi_features.get('predicted_weeks'),
+                'gain_target_pct': multi_features.get('gain_target_pct'),
+                'predicted_open': multi_features.get('predicted_open'),
+                'predicted_high': multi_features.get('predicted_high'),
+                'predicted_low': multi_features.get('predicted_low'),
+                'latest_data': latest_data,
+            },
+            is_published=False,
+        )
+        db.add(share)
+        db.commit()
+    except Exception:
+        pass
 
     return PredictResponse(
         task_id=request.task_id,
@@ -229,7 +285,7 @@ async def batch_predict(
     feature_service = FeatureService(db)
 
     try:
-        model, metrics, input_size = ModelCheckpoint.load_checkpoint(task.id)
+        model, metrics, input_size, feature_window = ModelCheckpoint.load_checkpoint(task.id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="模型检查点不存在，请先完成模型训练")
     except ValueError as e:
@@ -254,14 +310,23 @@ async def batch_predict(
 
             feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
                             'change_pct', 'change_amount', 'adj_close'}]
-            if not feature_cols or len(feature_cols) != input_size:
-                results.append({'stock_code': code, 'error': f'特征列数不匹配({len(feature_cols)} vs {input_size})'})
+            
+            dim_ok = True
+            if feature_window <= 1 and model_type not in ['lstm', 'gru']:
+                dim_ok = len(feature_cols) == input_size
+            elif feature_window > 1:
+                dim_ok = len(feature_cols) * feature_window == input_size
+            else:
+                dim_ok = len(feature_cols) == input_size
+            
+            if not feature_cols or not dim_ok:
+                results.append({'stock_code': code, 'error': f'特征列数不匹配({len(feature_cols)} vs {input_size}, window={feature_window})'})
                 continue
 
             df_features = df[feature_cols].copy()
             df_features = (df_features - df_features.mean()) / df_features.std()
 
-            prediction = _do_predict(model, model_type, model_config, df_features, input_size)
+            prediction = _do_predict(model, model_type, model_config, df_features, input_size, feature_window)
             prediction_label = _prediction_to_label(prediction, target)
 
             latest_row = df.iloc[-1]
@@ -303,8 +368,12 @@ async def get_predictable_stocks(
     return {'stocks': stocks_info}
 
 
-def _do_predict(model, model_type: str, model_config: dict, df_features, input_size: int) -> float:
-    """执行模型预测，返回原始预测值"""
+def _do_predict(model, model_type: str, model_config: dict, df_features, input_size: int, feature_window: int = 1) -> float:
+    """执行模型预测，返回原始预测值
+    
+    Args:
+        feature_window: 特征窗口天数，>1时构建窗口展平特征
+    """
     import numpy as np
 
     if model_type in ['lstm', 'gru']:
@@ -322,14 +391,25 @@ def _do_predict(model, model_type: str, model_config: dict, df_features, input_s
         if not TORCH_AVAILABLE:
             raise RuntimeError("PyTorch未安装，无法使用MLP模型预测")
         import torch
-        features = df_features.iloc[-1].values.reshape(1, -1)
-        tensor = torch.FloatTensor(features)
+        if feature_window > 1:
+            if len(df_features) < feature_window:
+                raise ValueError(f"数据量不足，需要至少{feature_window}条记录构建窗口特征")
+            window_data = df_features.iloc[-feature_window:].values.flatten().reshape(1, -1)
+            tensor = torch.FloatTensor(window_data)
+        else:
+            features = df_features.iloc[-1].values.reshape(1, -1)
+            tensor = torch.FloatTensor(features)
         with torch.no_grad():
             prediction = model(tensor).item()
     else:
-        # sklearn模型
-        features = df_features.iloc[-1].values.reshape(1, -1)
-        prediction = model.predict(features)[0]
+        if feature_window > 1:
+            if len(df_features) < feature_window:
+                raise ValueError(f"数据量不足，需要至少{feature_window}条记录构建窗口特征")
+            window_data = df_features.iloc[-feature_window:].values.flatten().reshape(1, -1)
+            prediction = model.predict(window_data)[0]
+        else:
+            features = df_features.iloc[-1].values.reshape(1, -1)
+            prediction = model.predict(features)[0]
 
     return float(prediction)
 

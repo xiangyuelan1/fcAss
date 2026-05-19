@@ -23,6 +23,7 @@ class UserModel(Base):
     # 特征配置
     features = Column(JSON, nullable=False, comment="特征列表")
     feature_config = Column(JSON, default=dict, comment="特征工程配置")
+    feature_window = Column(Integer, default=5, comment="特征窗口天数(1=单日截面,N=近N日展平)")
     
     # 目标配置
     target = Column(String(50), nullable=False, comment="预测目标")
@@ -59,6 +60,7 @@ class UserModel(Base):
             "model_params": self.model_config,
             "features": self.features,
             "feature_config": self.feature_config,
+            "feature_window": self.feature_window if self.feature_window is not None else 5,
             "target": self.target,
             "target_config": self.target_config,
             "stock_codes": self.stock_codes,
