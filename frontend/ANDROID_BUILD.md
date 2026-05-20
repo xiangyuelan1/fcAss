@@ -6,35 +6,54 @@
 2. 安装 JDK 17+
 3. 设置 ANDROID_HOME 环境变量
 
-## 构建步骤
+## 本地构建 APK 并部署到服务器
 
-### 1. 构建前端并同步到 Android
+### 步骤 1：构建前端并同步到 Android
 
 ```bash
 cd frontend
 npm run build:android
 ```
 
-### 2. 用 Android Studio 打开项目
+### 步骤 2：用 Android Studio 打开项目
 
 ```bash
 npx cap open android
 ```
 
-### 3. 在 Android Studio 中构建 APK
+### 步骤 3：在 Android Studio 中构建 APK
 
 1. 菜单: Build → Build Bundle(s) / APK(s) → Build APK(s)
 2. 等待构建完成
 3. APK 输出路径: `android/app/build/outputs/apk/debug/app-debug.apk`
 
-### 4. 或者用命令行构建
+### 步骤 4：复制 APK 到 app_downloads 目录
 
 ```bash
-cd android
-./gradlew assembleDebug
+# 从项目根目录
+copy frontend\android\app\build\outputs\apk\debug\app-debug.apk app_downloads\
+# 或者 Linux/Mac
+cp frontend/android/app/build/outputs/apk/debug/app-debug.apk app_downloads/
 ```
 
-APK 输出路径: `android/app/build/outputs/apk/debug/app-debug.apk`
+### 步骤 5：提交到 git 并推送到服务器
+
+```bash
+git add app_downloads/app-debug.apk
+git commit -m "更新 Android APK"
+git push
+```
+
+### 步骤 6：在服务器上拉取并重启 Docker
+
+```bash
+git pull
+docker-compose up -d --build backend
+```
+
+现在，用户可以通过网站的"下载安卓App"按钮下载了！
+
+---
 
 ## 发布版本（签名）
 
@@ -59,11 +78,17 @@ cd android
 ./gradlew assembleRelease
 ```
 
-## 网站提供下载
+5. 将 `app-release.apk` 复制到 `app_downloads/` 并重命名为 `app-debug.apk`（或者改后端代码支持 release 版本）
 
-构建完成后，将 APK 文件放到后端可访问的位置：
-- 开发版: `frontend/android/app/build/outputs/apk/debug/app-debug.apk`
-- 用户可通过 `/api/app/download` 接口检查和下载
+---
+
+## 验证 APK 下载
+
+1. 访问 `/api/app/download` 接口查看状态
+2. 前端的"下载安卓App"按钮应该可用
+3. 点击按钮应该能正常下载
+
+---
 
 ## 常见问题
 
@@ -72,3 +97,8 @@ cd android
 
 ### SDK 版本问题
 编辑 `android/variables.gradle`，调整 compileSdkVersion、minSdkVersion、targetSdkVersion。
+
+### APK 文件名问题
+后端默认下载 `app-debug.apk`，如果是 release 版本，需要：
+- 重命名文件为 `app-debug.apk`，或者
+- 修改 [backend/app/main.py](file:///d:/桌面/TRAESOLO/A股预测平台/开发A股预测训练平台/a_stock_trainer/backend/app/main.py#L143) 中的文件名

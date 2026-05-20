@@ -111,12 +111,9 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
 
     # 挂载APK下载目录为静态文件服务
-    apk_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "frontend", "android", "app", "build", "outputs", "apk", "debug",
-    )
-    if os.path.exists(apk_dir):
-        app.mount("/downloads", StaticFiles(directory=apk_dir), name="downloads")
+    apk_dir = os.path.join("/app/downloads")
+    os.makedirs(apk_dir, exist_ok=True)
+    app.mount("/downloads", StaticFiles(directory=apk_dir), name="downloads")
 
     return app
 
@@ -126,10 +123,7 @@ app = create_app()
 
 @app.get("/")
 async def root():
-    apk_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "frontend", "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk",
-    )
+    apk_path = os.path.join("/app/downloads", "app-debug.apk")
     apk_available = os.path.exists(apk_path)
     return {
         "name": settings.APP_NAME,
@@ -146,10 +140,7 @@ async def root():
 @app.get("/api/app/download")
 async def get_app_download():
     """查询安卓App下载信息"""
-    apk_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "frontend", "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk",
-    )
+    apk_path = os.path.join("/app/downloads", "app-debug.apk")
     apk_available = os.path.exists(apk_path)
     apk_size = os.path.getsize(apk_path) if apk_available else 0
     return {

@@ -48,6 +48,7 @@ import {
   InfoCircleOutlined,
   QuestionCircleOutlined,
   ShareAltOutlined,
+  PlusOutlined,
 } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
 import { trainingApi, modelApi, backtestApi, predictionApi, dataApi, watchlistApi } from '@/services/api'
@@ -55,11 +56,13 @@ import { TrainingTask, UserModel, BacktestResult, EquityPoint } from '@/types'
 import { PredictionResult, PredictionAnimation, ConfidenceBar, deriveConfidence, labelToDirection } from '@/components/PredictionFun'
 import { TrainingCompleteEffect } from '@/components/TrainingCompleteEffect'
 import MascotBull from '@/components/MascotBull'
+import { usePredictionStore } from '@/store'
 import dayjs from 'dayjs'
 
 interface PredictionRecord {
   task_id: number
   stock_code: string
+  stock_name?: string
   predict_date: string
   prediction: number
   prediction_label: string
@@ -416,11 +419,13 @@ const TrainingPredict: React.FC = () => {
   const [predicting, setPredicting] = useState(false)
   const [batchResults, setBatchResults] = useState<any[]>([])
   const [batchPredicting, setBatchPredicting] = useState(false)
-  const [historyRecords, setHistoryRecords] = useState<PredictionRecord[]>([])
+  const { historyRecords, addRecord: addRecordToStore, loadFromBackend } = usePredictionStore()
   const [realtimeQuote, setRealtimeQuote] = useState<RealtimeQuote | null>(null)
   const [loadingQuote, setLoadingQuote] = useState(false)
   const [sharingPrediction, setSharingPrediction] = useState(false)
   const [watchlistStocks, setWatchlistStocks] = useState<{ code: string; name: string }[]>([])
+  const [autoPredicting, setAutoPredicting] = useState(false)
+  const [expandedStock, setExpandedStock] = useState<string | null>(null)
 
   const [backtestResults, setBacktestResults] = useState<BacktestResult[]>([])
   const [backtestListLoading, setBacktestListLoading] = useState(false)
@@ -458,6 +463,7 @@ const TrainingPredict: React.FC = () => {
     if (selectedTaskId) {
       fetchPredictableStocks(selectedTaskId)
       fetchWatchlistStocks()
+      loadFromBackend(String(selectedTaskId))
     }
   }, [selectedTaskId])
 
@@ -576,9 +582,13 @@ const TrainingPredict: React.FC = () => {
   const fetchPredictableStocks = async (taskId: number) => {
     try {
       const data: any = await predictionApi.getPredictableStocks(taskId)
-      setPredictableStocks(data.stocks || [])
-      if (data.stocks?.length > 0 && !selectedStock) {
-        setSelectedStock(data.stocks[0].code)
+      const stocks = data.stocks || []
+      setPredictableStocks(stocks)
+      if (stocks.length > 0 && !selectedStock) {
+        setSelectedStock(stocks[0].code)
+      }
+      if (stocks.length > 0) {
+        handleAutoPredict(taskId, stocks)
       }
     } catch (error) {
       message.error('获取可预测股票失败')
@@ -769,6 +779,7 @@ const TrainingPredict: React.FC = () => {
     const record: PredictionRecord = {
       task_id: taskId,
       stock_code: result.stock_code,
+      stock_name: result.stock_name || predictableStocks.find(s => s.code === result.stock_code)?.name,
       predict_date: result.predict_date,
       prediction: result.prediction,
       prediction_label: result.prediction_label,
@@ -797,7 +808,7 @@ const TrainingPredict: React.FC = () => {
       predicted_low: result.predicted_low ?? null,
       predicted_close: result.predicted_close ?? null,
     }
-    setHistoryRecords((prev) => [record, ...prev])
+    addRecordToStore({ ...record, task_id: taskId })
   }
 
   const handlePredict = async () => {
@@ -883,6 +894,31 @@ const TrainingPredict: React.FC = () => {
       }
     } finally {
       setBatchPredicting(false)
+    }
+  }
+
+  const handleAutoPredict = async (taskId: number, stocks: { code: string; name: string }[]) => {
+    if (!taskId || stocks.length === 0) return
+    setAutoPredicting(true)
+    setBatchResults([])
+    setExpandedStock(null)
+    try {
+      const codes = stocks.map(s => s.code)
+      const data: any = await predictionApi.batchPredict({
+        task_id: taskId,
+        stock_codes: codes,
+      })
+      const predictions = data.predictions || []
+      setBatchResults(predictions)
+      predictions.forEach((p: any) => {
+        if (!p.error) {
+          addRecord({ ...p, predict_date: new Date().toISOString().slice(0, 10) }, taskId)
+        }
+      })
+    } catch {
+      // 自动预测静默失败，不阻断用户操作
+    } finally {
+      setAutoPredicting(false)
     }
   }
 
@@ -1178,54 +1214,6 @@ const TrainingPredict: React.FC = () => {
     },
   ]
 
-  const batchColumns = [
-    {
-      title: '股票代码',
-      dataIndex: 'stock_code',
-      key: 'stock_code',
-      render: (code: string) => {
-        const stock = predictableStocks.find((s) => s.code === code)
-        return stock ? `${code} ${stock.name}` : code
-      },
-    },
-    {
-      title: '预测值',
-      dataIndex: 'prediction',
-      key: 'prediction',
-      render: (val: number) => (val !== undefined ? val.toFixed(6) : '-'),
-    },
-    {
-      title: '预测方向',
-      dataIndex: 'prediction_label',
-      key: 'prediction_label',
-      render: (label: string) => {
-        if (!label) return '-'
-        const style = getLabelStyle(label)
-        return (
-          <Tag color={style.color === '#f5222d' ? 'red' : style.color === '#52c41a' ? 'green' : 'gold'} icon={style.icon}>
-            {label}
-          </Tag>
-        )
-      },
-    },
-    {
-      title: '最新收盘价',
-      dataIndex: 'latest_close',
-      key: 'latest_close',
-      render: (val: number) => (val ? `¥${val.toFixed(2)}` : '-'),
-    },
-    {
-      title: '状态',
-      key: 'status',
-      render: (_: any, record: any) =>
-        record.error ? (
-          <Tag color="red">失败: {record.error}</Tag>
-        ) : (
-          <Tag color="green">成功</Tag>
-        ),
-    },
-  ]
-
   const backtestColumns = [
     {
       title: '回测ID',
@@ -1340,6 +1328,17 @@ const TrainingPredict: React.FC = () => {
 
   const renderTrainingTab = () => (
     <>
+      <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'flex-end' }}>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          size="large"
+          onClick={() => navigate('/models/build')}
+        >
+          创建新模型
+        </Button>
+      </div>
+
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={8}>
           <Card>
@@ -1401,248 +1400,94 @@ const TrainingPredict: React.FC = () => {
   )
 
   const renderPredictTab = () => {
-    const renderTargetSpecificCards = (latest: PredictionRecord) => {
-      const changePct = latest.predicted_change_pct
-      const isUp = changePct !== null && changePct !== undefined && changePct > 0
-      const isDown = changePct !== null && changePct !== undefined && changePct < 0
-      const targetType = latest.target_type || selectedPredictModel?.target || 'next_day_return'
-
-      if (targetType === 'next_day_direction') {
-        return (
-          <>
-            <Col xs={24} sm={12}>
-              <Card>
-                <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>上涨概率</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ flex: 1, height: 16, borderRadius: 8, background: '#f0f0f0', overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${(latest.probability_up ?? 0) * 100}%`,
-                      borderRadius: 8,
-                      background: '#f5222d',
-                      transition: 'width 0.6s ease',
-                    }} />
-                  </div>
-                  <span style={{ fontWeight: 700, color: '#f5222d', minWidth: 60, textAlign: 'right' }}>
-                    {((latest.probability_up ?? 0) * 100).toFixed(1)}%
-                  </span>
-                </div>
-              </Card>
-            </Col>
-            <Col xs={24} sm={12}>
-              <Card>
-                <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>下跌概率</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ flex: 1, height: 16, borderRadius: 8, background: '#f0f0f0', overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%',
-                      width: `${(latest.probability_down ?? 0) * 100}%`,
-                      borderRadius: 8,
-                      background: '#52c41a',
-                      transition: 'width 0.6s ease',
-                    }} />
-                  </div>
-                  <span style={{ fontWeight: 700, color: '#52c41a', minWidth: 60, textAlign: 'right' }}>
-                    {((latest.probability_down ?? 0) * 100).toFixed(1)}%
-                  </span>
-                </div>
-              </Card>
-            </Col>
-          </>
-        )
-      }
-
-      if (targetType === 'price_change_5d') {
-        return (
-          <>
-            <Col xs={24} sm={12}>
-              <Card>
-                <Statistic
-                  title="5日累计变化"
-                  value={changePct ?? 0}
-                  precision={2}
-                  suffix="%"
-                  prefix={isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
-                  valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={12}>
-              <Card>
-                <Statistic
-                  title="日均变化率"
-                  value={latest.daily_avg_change_pct ?? 0}
-                  precision={4}
-                  suffix="%"
-                  valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
-                />
-              </Card>
-            </Col>
-          </>
-        )
-      }
-
-      if (targetType === 'multi_feature_next_day') {
-        return (
-          <>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic
-                  title="预测收益率"
-                  value={changePct ?? 0}
-                  precision={2}
-                  suffix="%"
-                  prefix={isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
-                  valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic
-                  title="预测波动率"
-                  value={latest.predicted_volatility ?? 0}
-                  precision={6}
-                  valueStyle={{ color: '#1890ff' }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic
-                  title="预测量变率"
-                  value={latest.predicted_volume_change ?? 0}
-                  precision={6}
-                  valueStyle={{ color: '#722ed1' }}
-                />
-              </Card>
-            </Col>
-          </>
-        )
-      }
-
-      if (targetType === 'next_day_ohlc') {
-        return (
-          <>
-            <Col xs={12} sm={6}>
-              <Card>
-                <Statistic title="预测开盘价" value={latest.predicted_open ?? 0} precision={2} prefix="¥" />
-              </Card>
-            </Col>
-            <Col xs={12} sm={6}>
-              <Card>
-                <Statistic title="预测最高价" value={latest.predicted_high ?? 0} precision={2} prefix="¥" valueStyle={{ color: '#f5222d' }} />
-              </Card>
-            </Col>
-            <Col xs={12} sm={6}>
-              <Card>
-                <Statistic title="预测最低价" value={latest.predicted_low ?? 0} precision={2} prefix="¥" valueStyle={{ color: '#52c41a' }} />
-              </Card>
-            </Col>
-            <Col xs={12} sm={6}>
-              <Card>
-                <Statistic title="预测收盘价" value={latest.predicted_close ?? 0} precision={2} prefix="¥" />
-              </Card>
-            </Col>
-          </>
-        )
-      }
-
-      if (targetType === 'trend_30d' || targetType === 'trend_60d' || targetType === 'trend_90d') {
-        const trendUp = latest.trend_direction === '上涨'
-        const trendDown = latest.trend_direction === '下跌'
-        return (
-          <>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic
-                  title="预测趋势"
-                  value={latest.trend_direction ?? '震荡'}
-                  valueStyle={trendUp ? { color: '#f5222d' } : trendDown ? { color: '#52c41a' } : { color: '#faad14' }}
-                  prefix={trendUp ? <ArrowUpOutlined /> : trendDown ? <ArrowDownOutlined /> : <MinusOutlined />}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic
-                  title="预测幅度"
-                  value={latest.predicted_trend_pct ?? 0}
-                  suffix="%"
-                  precision={2}
-                  valueStyle={trendUp ? { color: '#f5222d' } : trendDown ? { color: '#52c41a' } : { color: '#faad14' }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={8}>
-              <Card>
-                <Statistic
-                  title="预测周期"
-                  value={latest.predicted_trend_days ?? 0}
-                  suffix="天"
-                />
-              </Card>
-            </Col>
-          </>
-        )
-      }
-
-      if (targetType === 'time_to_gain_pct') {
-        return (
-          <>
-            <Col xs={24} sm={12}>
-              <Card>
-                <Statistic
-                  title="预计所需时间"
-                  value={latest.predicted_weeks ?? 0}
-                  suffix="周"
-                  precision={1}
-                  valueStyle={{ color: '#1890ff' }}
-                />
-              </Card>
-            </Col>
-            <Col xs={24} sm={12}>
-              <Card>
-                <Statistic
-                  title="目标涨幅"
-                  value={latest.gain_target_pct ?? 10}
-                  suffix="%"
-                  valueStyle={{ color: '#faad14' }}
-                />
-              </Card>
-            </Col>
-          </>
-        )
-      }
+    const renderExpandedStockDetail = (stockCode: string) => {
+      const record = historyRecords.find(
+        (r) => r.stock_code === stockCode && r.task_id === selectedTaskId
+      )
+      if (!record) return null
+      const targetType = record.target_type || selectedPredictModel?.target || 'next_day_return'
 
       return (
-        <>
-          <Col xs={24} sm={12}>
-            <Card>
+        <Card size="small" style={{ marginTop: 8, background: '#fafafa' }}>
+          <Row gutter={[8, 8]}>
+            <Col span={8}>
+              <Statistic title="预测值" value={record.prediction} precision={6} valueStyle={{ fontSize: 14 }} />
+            </Col>
+            <Col span={8}>
               <Statistic
-                title="预测目标价格"
-                value={latest.predicted_price ?? latest.latest_data?.close ?? 0}
-                prefix="¥"
-                precision={2}
-                valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : undefined}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} sm={12}>
-            <Card>
-              <Statistic
-                title="预测涨跌幅"
-                value={changePct ?? 0}
-                precision={2}
+                title="置信度"
+                value={(record.confidence ?? 0) * 100}
                 suffix="%"
-                prefix={isUp ? <ArrowUpOutlined /> : isDown ? <ArrowDownOutlined /> : <MinusOutlined />}
-                valueStyle={isUp ? { color: '#f5222d' } : isDown ? { color: '#52c41a' } : { color: '#faad14' }}
+                precision={1}
+                valueStyle={{ fontSize: 14 }}
               />
-            </Card>
-          </Col>
-        </>
+            </Col>
+            {record.predicted_price != null && (
+              <Col span={8}>
+                <Statistic title="预测价格" value={record.predicted_price} prefix="¥" precision={2} valueStyle={{ fontSize: 14 }} />
+              </Col>
+            )}
+            {targetType === 'next_day_direction' && (
+              <>
+                <Col span={12}>
+                  <Statistic title="上涨概率" value={(record.probability_up ?? 0) * 100} suffix="%" precision={1} valueStyle={{ fontSize: 14, color: '#f5222d' }} />
+                </Col>
+                <Col span={12}>
+                  <Statistic title="下跌概率" value={(record.probability_down ?? 0) * 100} suffix="%" precision={1} valueStyle={{ fontSize: 14, color: '#52c41a' }} />
+                </Col>
+              </>
+            )}
+            {targetType === 'next_day_ohlc' && (
+              <>
+                <Col span={6}><Statistic title="开盘" value={record.predicted_open ?? 0} prefix="¥" precision={2} valueStyle={{ fontSize: 13 }} /></Col>
+                <Col span={6}><Statistic title="最高" value={record.predicted_high ?? 0} prefix="¥" precision={2} valueStyle={{ fontSize: 13, color: '#f5222d' }} /></Col>
+                <Col span={6}><Statistic title="最低" value={record.predicted_low ?? 0} prefix="¥" precision={2} valueStyle={{ fontSize: 13, color: '#52c41a' }} /></Col>
+                <Col span={6}><Statistic title="收盘" value={record.predicted_close ?? 0} prefix="¥" precision={2} valueStyle={{ fontSize: 13 }} /></Col>
+              </>
+            )}
+            {(targetType === 'trend_30d' || targetType === 'trend_60d' || targetType === 'trend_90d') && (
+              <>
+                <Col span={8}>
+                  <Statistic title="趋势方向" value={record.trend_direction ?? '震荡'} valueStyle={{ fontSize: 14 }} />
+                </Col>
+                <Col span={8}>
+                  <Statistic title="预测幅度" value={record.predicted_trend_pct ?? 0} suffix="%" precision={2} valueStyle={{ fontSize: 14 }} />
+                </Col>
+                <Col span={8}>
+                  <Statistic title="预测周期" value={record.predicted_trend_days ?? 0} suffix="天" valueStyle={{ fontSize: 14 }} />
+                </Col>
+              </>
+            )}
+            {record.predicted_volatility != null && (
+              <Col span={8}>
+                <Statistic title="波动率" value={record.predicted_volatility} precision={6} valueStyle={{ fontSize: 14 }} />
+              </Col>
+            )}
+            {record.predicted_volume_change != null && (
+              <Col span={8}>
+                <Statistic title="量变率" value={record.predicted_volume_change} precision={6} valueStyle={{ fontSize: 14 }} />
+              </Col>
+            )}
+            {record.price_range_low != null && record.price_range_high != null && (
+              <Col span={8}>
+                <div style={{ fontSize: 12, color: '#888', padding: '4px 0' }}>
+                  区间: ¥{record.price_range_low.toFixed(2)} ~ ¥{record.price_range_high.toFixed(2)}
+                </div>
+              </Col>
+            )}
+            {record.latest_data && (
+              <Col span={24}>
+                <div style={{ fontSize: 12, color: '#999' }}>
+                  最新收盘: ¥{record.latest_data.close?.toFixed(2)} ({record.latest_data.date})
+                </div>
+              </Col>
+            )}
+          </Row>
+        </Card>
       )
     }
+
+    const successCount = batchResults.filter((p: any) => !p.error).length
 
     return (
       <>
@@ -1666,12 +1511,12 @@ const TrainingPredict: React.FC = () => {
           />
         )}
 
-        <Card title="选择模型和股票" style={{ marginBottom: 24 }}>
-          <Row gutter={[16, 16]}>
-            <Col xs={24} md={12}>
-              <div style={{ marginBottom: 8, fontWeight: 500 }}>训练任务（已完成的模型）</div>
+        <Card style={{ marginBottom: 24 }}>
+          <Row gutter={[16, 16]} align="middle">
+            <Col flex="auto">
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>选择训练任务</div>
               <Select
-                placeholder="选择已完成的训练任务"
+                placeholder="选择已完成的训练任务，自动预测所有训练股票"
                 value={selectedTaskId}
                 onChange={setSelectedTaskId}
                 style={{ width: '100%' }}
@@ -1688,25 +1533,7 @@ const TrainingPredict: React.FC = () => {
                 })}
               </Select>
             </Col>
-            <Col xs={24} md={12}>
-              <div style={{ marginBottom: 8, fontWeight: 500 }}>预测股票</div>
-              <AutoComplete
-                placeholder="选择或输入股票代码（如 000858）"
-                value={selectedStock}
-                onChange={(value) => setSelectedStock(value)}
-                style={{ width: '100%' }}
-                options={predictableStocks.map((stock) => ({
-                  value: stock.code,
-                  label: `${stock.code} - ${stock.name}`,
-                }))}
-                filterOption={(inputValue, option) =>
-                  option!.value.toLowerCase().includes(inputValue.toLowerCase()) ||
-                  option!.label.toLowerCase().includes(inputValue.toLowerCase())
-                }
-              />
-            </Col>
           </Row>
-
           {selectedPredictModel && (
             <Descriptions size="small" bordered column={{ xs: 1, sm: 2, md: 3 }} style={{ marginTop: 16 }}>
               <Descriptions.Item label="模型类型">{selectedPredictModel.model_type.toUpperCase()}</Descriptions.Item>
@@ -1724,213 +1551,74 @@ const TrainingPredict: React.FC = () => {
               <Descriptions.Item label="特征数量">{selectedPredictModel.features?.length || 0}个指标</Descriptions.Item>
             </Descriptions>
           )}
-
-          <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Button
-              type="primary"
-              icon={<ThunderboltOutlined />}
-              loading={predicting}
-              onClick={handlePredict}
-              disabled={!selectedTaskId || !selectedStock}
-              size="large"
-            >
-              开始预测
-            </Button>
-            <Button
-              icon={<RobotOutlined />}
-              loading={batchPredicting}
-              onClick={handleBatchPredict}
-              disabled={!selectedTaskId || predictableStocks.length === 0}
-              size="large"
-            >
-              批量预测所有股票
-            </Button>
-            <Button
-              icon={<StockOutlined />}
-              loading={batchPredicting}
-              onClick={handleWatchlistBatchPredict}
-              disabled={!selectedTaskId || watchlistStocks.length === 0}
-              size="large"
-            >
-              从自选股批量预测 ({watchlistStocks.length})
-            </Button>
-          </div>
         </Card>
 
-        {latestResult && (() => {
-          const direction = labelToDirection(latestResult.prediction_label)
-          const confidence = latestResult.confidence ?? deriveConfidence(latestResult.prediction)
-          const stock = predictableStocks.find(s => s.code === latestResult.stock_code)
-          const targetType = latestResult.target_type || selectedPredictModel?.target || 'next_day_return'
-          const isTrainingStock = predictableStocks.some(s => s.code === latestResult.stock_code)
-          const trainingStockNames = predictableStocks.map(s => `${s.code} ${s.name}`).join('、')
+        {autoPredicting && (
+          <Card style={{ textAlign: 'center', padding: '32px 0', marginBottom: 24 }}>
+            <Spin indicator={<LoadingOutlined style={{ fontSize: 32 }} spin />} />
+            <div style={{ marginTop: 12, color: '#666', fontSize: 15 }}>正在自动预测所有训练股票...</div>
+          </Card>
+        )}
 
-          return (
-            <Card title="最新预测结果" style={{ marginBottom: 24 }}
-              extra={
-                <Button
-                  icon={<ShareAltOutlined />}
-                  loading={sharingPrediction}
-                  onClick={() => handleSharePrediction(latestResult)}
-                  size="small"
-                >
-                  发布到社区
-                </Button>
-              }
-            >
-              <Row gutter={[16, 16]}>
-                <Col xs={24} md={12}>
-                  <Card
-                    style={{
-                      background: getLabelStyle(latestResult.prediction_label).bg,
-                      borderRadius: 12,
-                    }}
-                  >
-                    <PredictionResult
-                      direction={direction}
-                      confidence={confidence}
-                      stockName={stock?.name}
-                      stockCode={latestResult.stock_code}
-                      predictedPrice={latestResult.predicted_price}
-                      predictedChangePct={latestResult.predicted_change_pct}
-                      priceRangeLow={latestResult.price_range_low}
-                      priceRangeHigh={latestResult.price_range_high}
-                      predictedVolatility={latestResult.predicted_volatility}
-                      predictedVolumeChange={latestResult.predicted_volume_change}
-                      targetType={targetType}
-                    />
-                  </Card>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Row gutter={[16, 16]}>
-                    <Col span={24}>
-                      <Card>
-                        <PredictionAnimation
-                          direction={direction}
-                          value={latestResult.prediction}
-                          label={latestResult.prediction_label}
-                        />
-                      </Card>
-                    </Col>
-                    {renderTargetSpecificCards(latestResult)}
-                    <Col xs={24} sm={12}>
-                      <Card>
-                        <Statistic
-                          title="最新收盘价"
-                          value={latestResult.latest_data?.close || 0}
-                          prefix="¥"
-                          precision={2}
-                        />
-                        <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
-                          数据日期: {latestResult.latest_data?.date || '-'}
+        {!autoPredicting && batchResults.length > 0 && (
+          <Card
+            title={`预测结果（${successCount}/${batchResults.length} 只股票）`}
+            style={{ marginBottom: 24 }}
+          >
+            <Row gutter={[16, 16]}>
+              {batchResults.map((p: any) => {
+                if (p.error) return null
+                const stockName = p.stock_name || predictableStocks.find((s: any) => s.code === p.stock_code)?.name || p.stock_code
+                const changePct = p.predicted_change_pct
+                const isUp = changePct != null && changePct > 0
+                const isDown = changePct != null && changePct < 0
+                const confidence = p.confidence
+                const label = p.prediction_label || (isUp ? '看涨' : isDown ? '看跌' : '震荡')
+                const isExpanded = expandedStock === p.stock_code
+
+                return (
+                  <Col xs={24} sm={12} md={8} key={p.stock_code}>
+                    <Card
+                      size="small"
+                      hoverable
+                      style={{ borderLeft: `3px solid ${isUp ? '#f5222d' : isDown ? '#52c41a' : '#faad14'}` }}
+                      onClick={() => setExpandedStock(isExpanded ? null : p.stock_code)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 14 }}>{stockName}</div>
+                          <div style={{ color: '#999', fontSize: 12 }}>{p.stock_code}</div>
                         </div>
-                      </Card>
-                    </Col>
-                    <Col xs={24} sm={12}>
-                      <Card>
-                        <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>置信度</div>
-                        <ConfidenceBar confidence={confidence} />
-                        {latestResult.price_range_low != null && latestResult.price_range_high != null && (
-                          <div style={{ marginTop: 12, fontSize: 13, color: '#888' }}>
-                            价格区间: ¥{latestResult.price_range_low.toFixed(2)} ~ ¥{latestResult.price_range_high.toFixed(2)}
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: 20, fontWeight: 700, color: isUp ? '#f5222d' : isDown ? '#52c41a' : '#faad14' }}>
+                            {label === '看涨' ? '看涨 ↑' : label === '看跌' ? '看跌 ↓' : '震荡 -'}
                           </div>
-                        )}
-                      </Card>
-                    </Col>
-                  </Row>
-                </Col>
-              </Row>
-
-              {!isTrainingStock && (
-                <Alert
-                  style={{ marginTop: 16 }}
-                  message="跨股票预测提示"
-                  description={`此模型使用 ${trainingStockNames || '其他股票'} 数据训练，预测当前股票基于特征模式泛化，结果仅供参考。模型学习的是技术指标组合的特征模式，而非特定股票的规律。`}
-                  type="info"
-                  showIcon
-                />
-              )}
-
-              {realtimeQuote && (
-                <Card
-                  title={
-                    <Space>
-                      <StockOutlined />
-                      <span>实时行情 - {realtimeQuote.name}({realtimeQuote.code})</span>
-                      <Tooltip title="刷新行情">
-                        <Button
-                          type="link"
+                          {changePct != null && (
+                            <div style={{ fontSize: 12, color: isUp ? '#f5222d' : isDown ? '#52c41a' : '#999' }}>
+                              {changePct > 0 ? '+' : ''}{changePct.toFixed(2)}%
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {confidence != null && (
+                        <Progress
+                          percent={Math.round(confidence * 100)}
                           size="small"
-                          icon={<ReloadOutlined spin={loadingQuote} />}
-                          onClick={() => fetchRealtimeQuote(latestResult.stock_code)}
+                          strokeColor={confidence > 0.6 ? '#52c41a' : '#faad14'}
+                          style={{ marginTop: 8 }}
                         />
-                      </Tooltip>
-                    </Space>
-                  }
-                  style={{ marginTop: 16 }}
-                  size="small"
-                >
-                  <Row gutter={[16, 12]}>
-                    <Col xs={8} sm={4}>
-                      <Statistic
-                        title="当前价"
-                        value={realtimeQuote.price}
-                        precision={2}
-                        prefix="¥"
-                        valueStyle={realtimeQuote.change_pct > 0 ? { color: '#f5222d' } : realtimeQuote.change_pct < 0 ? { color: '#52c41a' } : undefined}
-                      />
-                    </Col>
-                    <Col xs={8} sm={4}>
-                      <Statistic
-                        title="涨跌幅"
-                        value={realtimeQuote.change_pct}
-                        precision={2}
-                        suffix="%"
-                        valueStyle={realtimeQuote.change_pct > 0 ? { color: '#f5222d' } : realtimeQuote.change_pct < 0 ? { color: '#52c41a' } : undefined}
-                        prefix={realtimeQuote.change_pct > 0 ? <ArrowUpOutlined /> : realtimeQuote.change_pct < 0 ? <ArrowDownOutlined /> : undefined}
-                      />
-                    </Col>
-                    <Col xs={8} sm={4}><Statistic title="开盘" value={realtimeQuote.open} precision={2} prefix="¥" /></Col>
-                    <Col xs={8} sm={4}><Statistic title="最高" value={realtimeQuote.high} precision={2} prefix="¥" /></Col>
-                    <Col xs={8} sm={4}><Statistic title="最低" value={realtimeQuote.low} precision={2} prefix="¥" /></Col>
-                    <Col xs={8} sm={4}><Statistic title="昨收" value={realtimeQuote.pre_close} precision={2} prefix="¥" /></Col>
-                  </Row>
-                  <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
-                    行情时间: {realtimeQuote.time || '-'}
-                  </div>
-                </Card>
-              )}
-
-              <Alert
-                style={{ marginTop: 16 }}
-                message="预测说明"
-                description={
-                  latestResult.prediction_label === '看涨'
-                    ? `模型预测 ${latestResult.stock_code} 短期有上涨趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
-                    : latestResult.prediction_label === '看跌'
-                    ? `模型预测 ${latestResult.stock_code} 短期有下跌趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
-                    : `模型预测 ${latestResult.stock_code} 短期走势震荡，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
-                }
-                type={
-                  latestResult.prediction_label === '看涨' ? 'success' :
-                  latestResult.prediction_label === '看跌' ? 'warning' : 'info'
-                }
-                showIcon
-              />
-            </Card>
-          )
-        })()}
-
-        {batchResults.length > 0 && (
-          <Card title="批量预测结果" style={{ marginBottom: 24 }}>
-            <Table
-              columns={batchColumns}
-              dataSource={batchResults}
-              rowKey="stock_code"
-              pagination={false}
-              size="small"
-              scroll={{ x: 700 }}
-            />
+                      )}
+                    </Card>
+                    {isExpanded && renderExpandedStockDetail(p.stock_code)}
+                  </Col>
+                )
+              })}
+            </Row>
+            {batchResults.some((p: any) => p.error) && (
+              <div style={{ marginTop: 12, fontSize: 12, color: '#999' }}>
+                {batchResults.filter((p: any) => p.error).length} 只股票预测失败
+              </div>
+            )}
             <Alert
               style={{ marginTop: 16 }}
               message="以上预测结果仅供参考，不构成任何投资建议。股市有风险，投资需谨慎。"
@@ -1940,98 +1628,302 @@ const TrainingPredict: React.FC = () => {
           </Card>
         )}
 
+        <Collapse
+          ghost
+          style={{ marginBottom: 16 }}
+          items={[
+            {
+              key: 'manual',
+              label: '手动预测（选择特定股票）',
+              children: (
+                <Card size="small">
+                  <Row gutter={[16, 16]}>
+                    <Col xs={24} md={12}>
+                      <div style={{ marginBottom: 8, fontWeight: 500 }}>预测股票</div>
+                      <AutoComplete
+                        placeholder="选择或输入股票代码（如 000858）"
+                        value={selectedStock}
+                        onChange={(value) => setSelectedStock(value)}
+                        style={{ width: '100%' }}
+                        options={predictableStocks.map((stock) => ({
+                          value: stock.code,
+                          label: `${stock.code} - ${stock.name}`,
+                        }))}
+                        filterOption={(inputValue, option) =>
+                          option!.value.toLowerCase().includes(inputValue.toLowerCase()) ||
+                          option!.label.toLowerCase().includes(inputValue.toLowerCase())
+                        }
+                      />
+                    </Col>
+                  </Row>
+                  <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <Button
+                      type="primary"
+                      icon={<ThunderboltOutlined />}
+                      loading={predicting}
+                      onClick={handlePredict}
+                      disabled={!selectedTaskId || !selectedStock}
+                    >
+                      开始预测
+                    </Button>
+                    <Button
+                      icon={<RobotOutlined />}
+                      loading={batchPredicting}
+                      onClick={handleBatchPredict}
+                      disabled={!selectedTaskId || predictableStocks.length === 0}
+                    >
+                      批量预测所有股票
+                    </Button>
+                    <Button
+                      icon={<StockOutlined />}
+                      loading={batchPredicting}
+                      onClick={handleWatchlistBatchPredict}
+                      disabled={!selectedTaskId || watchlistStocks.length === 0}
+                    >
+                      从自选股批量预测 ({watchlistStocks.length})
+                    </Button>
+                  </div>
+                </Card>
+              ),
+            },
+          ]}
+        />
+
+        {latestResult && !autoPredicting && (
+          <Card
+            title="最新单股预测结果"
+            style={{ marginBottom: 24 }}
+            extra={
+              <Button
+                icon={<ShareAltOutlined />}
+                loading={sharingPrediction}
+                onClick={() => handleSharePrediction(latestResult)}
+                size="small"
+              >
+                发布到社区
+              </Button>
+            }
+          >
+            <Row gutter={[16, 16]}>
+              <Col xs={24} md={12}>
+                <Card
+                  style={{
+                    background: getLabelStyle(latestResult.prediction_label).bg,
+                    borderRadius: 12,
+                  }}
+                >
+                  <PredictionResult
+                    direction={labelToDirection(latestResult.prediction_label)}
+                    confidence={latestResult.confidence ?? deriveConfidence(latestResult.prediction)}
+                    stockName={predictableStocks.find(s => s.code === latestResult.stock_code)?.name}
+                    stockCode={latestResult.stock_code}
+                    predictedPrice={latestResult.predicted_price}
+                    predictedChangePct={latestResult.predicted_change_pct}
+                    priceRangeLow={latestResult.price_range_low}
+                    priceRangeHigh={latestResult.price_range_high}
+                    predictedVolatility={latestResult.predicted_volatility}
+                    predictedVolumeChange={latestResult.predicted_volume_change}
+                    targetType={latestResult.target_type || selectedPredictModel?.target || 'next_day_return'}
+                  />
+                </Card>
+              </Col>
+              <Col xs={24} md={12}>
+                <Row gutter={[16, 16]}>
+                  <Col span={24}>
+                    <Card>
+                      <PredictionAnimation
+                        direction={labelToDirection(latestResult.prediction_label)}
+                        value={latestResult.prediction}
+                        label={latestResult.prediction_label}
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Card>
+                      <Statistic
+                        title="最新收盘价"
+                        value={latestResult.latest_data?.close || 0}
+                        prefix="¥"
+                        precision={2}
+                      />
+                      <div style={{ marginTop: 8, color: '#999', fontSize: 12 }}>
+                        数据日期: {latestResult.latest_data?.date || '-'}
+                      </div>
+                    </Card>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Card>
+                      <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>置信度</div>
+                      <ConfidenceBar confidence={latestResult.confidence ?? deriveConfidence(latestResult.prediction)} />
+                      {latestResult.price_range_low != null && latestResult.price_range_high != null && (
+                        <div style={{ marginTop: 12, fontSize: 13, color: '#888' }}>
+                          价格区间: ¥{latestResult.price_range_low.toFixed(2)} ~ ¥{latestResult.price_range_high.toFixed(2)}
+                        </div>
+                      )}
+                    </Card>
+                  </Col>
+                </Row>
+              </Col>
+            </Row>
+
+            {!predictableStocks.some(s => s.code === latestResult.stock_code) && (
+              <Alert
+                style={{ marginTop: 16 }}
+                message="跨股票预测提示"
+                description={`此模型使用 ${predictableStocks.map(s => `${s.code} ${s.name}`).join('、') || '其他股票'} 数据训练，预测当前股票基于特征模式泛化，结果仅供参考。`}
+                type="info"
+                showIcon
+              />
+            )}
+
+            <Alert
+              style={{ marginTop: 16 }}
+              message="预测说明"
+              description={
+                latestResult.prediction_label === '看涨'
+                  ? `模型预测 ${latestResult.stock_code} 短期有上涨趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+                  : latestResult.prediction_label === '看跌'
+                  ? `模型预测 ${latestResult.stock_code} 短期有下跌趋势，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+                  : `模型预测 ${latestResult.stock_code} 短期走势震荡，预测值为 ${latestResult.prediction.toFixed(6)}。请注意：此预测仅供参考，不构成投资建议。`
+              }
+              type={
+                latestResult.prediction_label === '看涨' ? 'success' :
+                latestResult.prediction_label === '看跌' ? 'warning' : 'info'
+              }
+              showIcon
+            />
+          </Card>
+        )}
+
+        {realtimeQuote && latestResult && (
+          <Card
+            title={
+              <Space>
+                <StockOutlined />
+                <span>实时行情 - {realtimeQuote.name}({realtimeQuote.code})</span>
+                <Tooltip title="刷新行情">
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<ReloadOutlined spin={loadingQuote} />}
+                    onClick={() => fetchRealtimeQuote(latestResult.stock_code)}
+                  />
+                </Tooltip>
+              </Space>
+            }
+            style={{ marginBottom: 24 }}
+            size="small"
+          >
+            <Row gutter={[16, 12]}>
+              <Col xs={8} sm={4}>
+                <Statistic
+                  title="当前价"
+                  value={realtimeQuote.price}
+                  precision={2}
+                  prefix="¥"
+                  valueStyle={realtimeQuote.change_pct > 0 ? { color: '#f5222d' } : realtimeQuote.change_pct < 0 ? { color: '#52c41a' } : undefined}
+                />
+              </Col>
+              <Col xs={8} sm={4}>
+                <Statistic
+                  title="涨跌幅"
+                  value={realtimeQuote.change_pct}
+                  precision={2}
+                  suffix="%"
+                  valueStyle={realtimeQuote.change_pct > 0 ? { color: '#f5222d' } : realtimeQuote.change_pct < 0 ? { color: '#52c41a' } : undefined}
+                  prefix={realtimeQuote.change_pct > 0 ? <ArrowUpOutlined /> : realtimeQuote.change_pct < 0 ? <ArrowDownOutlined /> : undefined}
+                />
+              </Col>
+              <Col xs={8} sm={4}><Statistic title="开盘" value={realtimeQuote.open} precision={2} prefix="¥" /></Col>
+              <Col xs={8} sm={4}><Statistic title="最高" value={realtimeQuote.high} precision={2} prefix="¥" /></Col>
+              <Col xs={8} sm={4}><Statistic title="最低" value={realtimeQuote.low} precision={2} prefix="¥" /></Col>
+              <Col xs={8} sm={4}><Statistic title="昨收" value={realtimeQuote.pre_close} precision={2} prefix="¥" /></Col>
+            </Row>
+            <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
+              行情时间: {realtimeQuote.time || '-'}
+            </div>
+          </Card>
+        )}
+
         {historyRecords.length > 0 && (
           <Card
             title={`预测历史（共 ${historyRecords.length} 条）`}
             extra={
-              <Button size="small" danger icon={<DeleteOutlined />} onClick={() => setHistoryRecords([])}>
+              <Button size="small" danger icon={<DeleteOutlined />} onClick={() => usePredictionStore.getState().clearRecords()}>
                 清空
               </Button>
             }
             style={{ marginBottom: 24 }}
           >
             <Collapse
-              items={Object.entries(groupedRecords).map(([stockCode, records]) => ({
-                key: stockCode,
-                label: (
-                  <Space>
-                    <span style={{ fontWeight: 600 }}>{stockCode}</span>
-                    <Tag>{records.length} 条预测</Tag>
-                    {records.length > 0 && (() => {
-                      const latest = records[0]
-                      const style = getLabelStyle(latest.prediction_label)
-                      return (
-                        <Tag color={style.color === '#f5222d' ? 'red' : style.color === '#52c41a' ? 'green' : 'gold'}>
-                          最新: {latest.prediction_label}
+              defaultActiveKey={Object.keys(groupedRecords).slice(0, 3)}
+              style={{ marginTop: 16 }}
+              items={Object.entries(groupedRecords).map(([stockCode, records]) => {
+                const latest = records[0]
+                const isUp = latest.prediction_label === '看涨'
+                const isDown = latest.prediction_label === '看跌'
+                return {
+                  key: stockCode,
+                  label: (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>
+                        <span style={{ fontWeight: 600 }}>{latest.stock_name || stockCode}</span>
+                        <span style={{ color: '#999', marginLeft: 8 }}>{stockCode}</span>
+                      </span>
+                      <span>
+                        <Tag color={isUp ? 'red' : isDown ? 'green' : 'default'}>
+                          {isUp ? '看涨 ↑' : isDown ? '看跌 ↓' : '震荡 -'}
                         </Tag>
-                      )
-                    })()}
-                  </Space>
-                ),
-                children: (
-                  <Table
-                    size="small"
-                    pagination={false}
-                    dataSource={records}
-                    rowKey="timestamp"
-                    scroll={{ x: 800 }}
-                    columns={[
-                      {
-                        title: '模型',
-                        key: 'model',
-                        render: (_: any, r: PredictionRecord) => (
-                          <span>{r.model_name} <Tag>{r.model_type.toUpperCase()}</Tag></span>
-                        ),
-                      },
-                      {
-                        title: '预测方向',
-                        dataIndex: 'prediction_label',
-                        key: 'prediction_label',
-                        render: (label: string) => {
-                          const style = getLabelStyle(label)
-                          return (
-                            <Tag color={style.color === '#f5222d' ? 'red' : style.color === '#52c41a' ? 'green' : 'gold'} icon={style.icon}>
-                              {label}
-                            </Tag>
-                          )
-                        },
-                      },
-                      {
-                        title: '预测值',
-                        dataIndex: 'prediction',
-                        key: 'prediction',
-                        render: (val: number) => val.toFixed(6),
-                      },
-                      {
-                        title: '收盘价',
-                        key: 'close',
-                        render: (_: any, r: PredictionRecord) =>
-                          r.latest_data?.close ? `¥${r.latest_data.close.toFixed(2)}` : '-',
-                      },
-                      {
-                        title: '预测时间',
-                        key: 'time',
-                        render: (_: any, r: PredictionRecord) => new Date(r.timestamp).toLocaleString(),
-                      },
-                      {
-                        title: '操作',
-                        key: 'action',
-                        render: (_: any, r: PredictionRecord) => (
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<ShareAltOutlined />}
-                            loading={sharingPrediction}
-                            onClick={() => handleSharePrediction(r)}
-                          >
-                            发布
-                          </Button>
-                        ),
-                      },
-                    ]}
-                  />
-                ),
-              }))}
+                        <span style={{ fontSize: 12, color: '#999', marginLeft: 8 }}>
+                          {records.length}条预测
+                        </span>
+                      </span>
+                    </div>
+                  ),
+                  children: (
+                    <Row gutter={[8, 8]}>
+                      {records.map((rec, idx) => {
+                        const recIsUp = rec.prediction_label === '看涨'
+                        const recIsDown = rec.prediction_label === '看跌'
+                        return (
+                          <Col xs={24} sm={12} md={8} key={idx}>
+                            <Card size="small" style={{
+                              borderLeft: `3px solid ${recIsUp ? '#f5222d' : recIsDown ? '#52c41a' : '#faad14'}`
+                            }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                                <span style={{ fontSize: 12, color: '#999' }}>{rec.predict_date || new Date(rec.timestamp).toLocaleDateString()}</span>
+                                <Tag color={recIsUp ? 'red' : recIsDown ? 'green' : 'default'} style={{ fontSize: 11 }}>
+                                  {recIsUp ? '看涨' : recIsDown ? '看跌' : '震荡'}
+                                </Tag>
+                              </div>
+                              {rec.predicted_price != null && (
+                                <div style={{ fontSize: 16, fontWeight: 600 }}>
+                                  ¥{rec.predicted_price.toFixed(2)}
+                                </div>
+                              )}
+                              {rec.predicted_change_pct != null && (
+                                <div style={{ fontSize: 12, color: rec.predicted_change_pct > 0 ? '#f5222d' : rec.predicted_change_pct < 0 ? '#52c41a' : '#999' }}>
+                                  {rec.predicted_change_pct > 0 ? '+' : ''}{rec.predicted_change_pct.toFixed(2)}%
+                                </div>
+                              )}
+                              {rec.confidence != null && (
+                                <div style={{ marginTop: 4 }}>
+                                  <Progress percent={Math.round(rec.confidence * 100)} size="small" strokeColor={rec.confidence > 0.6 ? '#52c41a' : '#faad14'} />
+                                </div>
+                              )}
+                              {rec.model_name && (
+                                <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+                                  {rec.model_name}
+                                </div>
+                              )}
+                            </Card>
+                          </Col>
+                        )
+                      })}
+                    </Row>
+                  ),
+                }
+              })}
             />
           </Card>
         )}

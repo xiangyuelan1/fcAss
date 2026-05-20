@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
-from collections import defaultdict
 
 from app.core.database import get_db
 from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
@@ -42,6 +41,7 @@ class PredictResponse(BaseModel):
     predict_date: str
     prediction: float
     prediction_label: str
+    direction_label: Optional[str] = None
     confidence: Optional[float] = None
     predicted_price: Optional[float] = None
     predicted_change_pct: Optional[float] = None
@@ -234,8 +234,10 @@ async def predict(
         )
         db.add(share)
         db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        db.rollback()
+
+    direction_label = _direction_to_chinese(prediction_label)
 
     return PredictResponse(
         task_id=request.task_id,
@@ -243,6 +245,7 @@ async def predict(
         predict_date=predict_date,
         prediction=round(float(prediction), 6),
         prediction_label=prediction_label,
+        direction_label=direction_label,
         confidence=round(confidence, 4) if confidence is not None else None,
         predicted_price=predicted_price,
         predicted_change_pct=round(predicted_change_pct, 4) if predicted_change_pct is not None else None,
@@ -283,6 +286,7 @@ async def batch_predict(
 
     user_model = task.user_model
     feature_service = FeatureService(db)
+    data_service = DataService(db)
 
     try:
         model, metrics, input_size, feature_window = ModelCheckpoint.load_checkpoint(task.id)
@@ -330,11 +334,46 @@ async def batch_predict(
             prediction_label = _prediction_to_label(prediction, target)
 
             latest_row = df.iloc[-1]
+            latest_close = float(latest_row['close']) if latest_row['close'] is not None else None
+
+            confidence = _compute_confidence(prediction, target)
+            predicted_change_pct = _compute_predicted_change_pct(prediction, target)
+            predicted_price = None
+            if latest_close and predicted_change_pct is not None:
+                predicted_price = round(latest_close * (1 + predicted_change_pct / 100), 2)
+
+            try:
+                stock_info = data_service.get_stock_by_code(code)
+                stock_name = stock_info.name if stock_info else None
+                share = PredictionShare(
+                    user_id=current_user.id,
+                    task_id=request.task_id,
+                    model_id=user_model.id if user_model else None,
+                    model_name=user_model.name if user_model else None,
+                    model_type=user_model.model_type if user_model else None,
+                    stock_code=code,
+                    stock_name=stock_name,
+                    target_type=target,
+                    direction=prediction_label,
+                    prediction_value=prediction,
+                    confidence=confidence,
+                    predicted_change_pct=predicted_change_pct,
+                    predicted_price=predicted_price,
+                    prediction_data={
+                        'latest_close': latest_close,
+                    },
+                    is_published=False,
+                )
+                db.add(share)
+                db.commit()
+            except Exception as e:
+                db.rollback()
+
             results.append({
                 'stock_code': code,
                 'prediction': round(float(prediction), 6),
                 'prediction_label': prediction_label,
-                'latest_close': float(latest_row['close']) if latest_row['close'] is not None else None,
+                'latest_close': latest_close,
             })
         except Exception as e:
             results.append({'stock_code': code, 'error': str(e)})
@@ -415,34 +454,29 @@ def _do_predict(model, model_type: str, model_config: dict, df_features, input_s
 
 
 def _prediction_to_label(prediction: float, target: str) -> str:
-    """将原始预测值转换为可读标签"""
-    if target == 'next_day_direction':
-        return '看涨' if prediction > 0.5 else '看跌'
-    elif target in ('next_day_return', 'price_change_5d'):
-        if prediction > 0.005:
-            return '看涨'
-        elif prediction < -0.005:
-            return '看跌'
+    """将原始预测值转换为英文方向标识（up/down/flat），供数据库存储和前端匹配"""
+    if target in ('next_day_direction',):
+        if prediction > 0.5:
+            return 'up'
+        elif prediction < 0.5:
+            return 'down'
         else:
-            return '震荡'
-    elif target in ('trend_30d', 'trend_60d', 'trend_90d'):
-        if prediction > 0.02:
-            return '上涨'
-        elif prediction < -0.02:
-            return '下跌'
-        else:
-            return '震荡'
-    elif target == 'time_to_gain_pct':
-        return f'约{round(max(prediction, 0.1), 1)}周达标'
-    elif target == 'next_day_ohlc':
-        if prediction > 0.005:
-            return '看涨'
-        elif prediction < -0.005:
-            return '看跌'
-        else:
-            return '震荡'
+            return 'flat'
     else:
-        return '看涨' if prediction > 0 else '看跌'
+        if prediction > 0.001:
+            return 'up'
+        elif prediction < -0.001:
+            return 'down'
+        else:
+            return 'flat'
+
+
+_DIRECTION_LABEL_ZH = {'up': '看涨', 'down': '看跌', 'flat': '震荡'}
+
+
+def _direction_to_chinese(direction: str) -> str:
+    """将英文方向标识转换为中文标签，用于前端展示"""
+    return _DIRECTION_LABEL_ZH.get(direction, direction)
 
 
 def _compute_confidence(prediction: float, target: str) -> float:
@@ -606,16 +640,13 @@ async def get_my_predictions(
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """获取我的预测结果（按股票分组）"""
+    """获取我的预测结果"""
     shares = db.query(PredictionShare).filter(
         PredictionShare.user_id == current_user.id
     ).order_by(PredictionShare.created_at.desc()).all()
 
-    grouped = defaultdict(list)
-    for share in shares:
-        grouped[share.stock_code].append(share.to_dict())
-
-    return {"items": dict(grouped), "total": len(shares)}
+    items = [share.to_dict() for share in shares]
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/predictions/community")

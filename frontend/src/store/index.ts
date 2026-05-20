@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { Stock, UserModel, TrainingTask, BacktestResult, Indicator, ModelType } from '@/types';
-import { authApi } from '@/services/api';
+import { authApi, predictionApi } from '@/services/api';
 
 // 认证状态
 interface UserInfo {
@@ -193,4 +193,28 @@ export const useAppStore = create<AppState>((set) => ({
   theme: 'light',
   setCollapsed: (collapsed) => set({ collapsed }),
   setTheme: (theme) => set({ theme }),
+}));
+
+// 预测结果状态
+interface PredictionStore {
+  historyRecords: any[]
+  setHistoryRecords: (records: any[]) => void
+  addRecord: (record: any) => void
+  clearRecords: () => void
+  loadFromBackend: (taskId: string) => Promise<void>
+}
+
+export const usePredictionStore = create<PredictionStore>((set) => ({
+  historyRecords: [],
+  setHistoryRecords: (records) => set({ historyRecords: records }),
+  addRecord: (record) => set((state) => ({ historyRecords: [record, ...state.historyRecords] })),
+  clearRecords: () => set({ historyRecords: [] }),
+  loadFromBackend: async (taskId) => {
+    try {
+      const res: any = await predictionApi.getMyPredictions()
+      const items = res?.items || (Array.isArray(res) ? res : [])
+      const filtered = taskId ? items.filter((p: any) => String(p.task_id) === String(taskId)) : items
+      set({ historyRecords: filtered })
+    } catch {}
+  },
 }));

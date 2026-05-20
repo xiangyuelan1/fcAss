@@ -64,8 +64,8 @@ const Dashboard: React.FC = () => {
   const fetchMyPredictions = async () => {
     try {
       const res: any = await predictionApi.getMyPredictions()
-      const items = (res as any)?.items || (Array.isArray(res) ? res : [])
-      setMyPredictions(items)
+      const items = res?.items || (Array.isArray(res) ? res : [])
+      setMyPredictions(Array.isArray(items) ? items : [])
     } catch {}
   }
 
@@ -147,8 +147,8 @@ const Dashboard: React.FC = () => {
 
   // 预测方向信息映射，用于"我的预测结果"展示
   const getDirectionInfo = (direction: string) => {
-    if (direction === 'up') return { label: '看涨', color: 'red', icon: <RiseOutlined /> }
-    if (direction === 'down') return { label: '看跌', color: 'green', icon: <FallOutlined /> }
+    if (direction === 'up' || direction === '看涨') return { label: '看涨', color: 'red', icon: <RiseOutlined /> }
+    if (direction === 'down' || direction === '看跌') return { label: '看跌', color: 'green', icon: <FallOutlined /> }
     return { label: '震荡', color: 'default', icon: <MinusOutlined /> }
   }
 

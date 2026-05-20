@@ -1,0 +1,4 @@
+# 这个目录用于存放 Android APK 文件
+# 将本地构建的 app-debug.apk 放到这里，然后提交到 git
+# Docker 容器会挂载这个目录到 /app/downloads 提供下载
+
