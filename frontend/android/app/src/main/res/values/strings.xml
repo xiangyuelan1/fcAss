@@ -4,4 +4,5 @@
     <string name="title_activity_main">AI量化训练</string>
     <string name="package_name">com.astock.trainer</string>
     <string name="custom_url_scheme">com.astock.trainer</string>
+    <string name="widget_description">显示最新股票预测结果</string>
 </resources>

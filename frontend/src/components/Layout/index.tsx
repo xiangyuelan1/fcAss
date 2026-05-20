@@ -40,6 +40,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [onboardingVisible, setOnboardingVisible] = useState(false)
   const [disclaimerVisible, setDisclaimerVisible] = useState(false)
+  const [downloadModalVisible, setDownloadModalVisible] = useState(false)
   const [onlineCount, setOnlineCount] = useState<number>(0)
   const [unreadCount, setUnreadCount] = useState<number>(0)
   const navigate = useNavigate()
@@ -108,6 +109,45 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   }, [])
 
   const isAdmin = user?.is_admin
+
+  const handleDownloadApp = () => {
+    const link = document.createElement('a')
+    link.href = '/downloads/app-debug.apk'
+    link.download = 'ai-quant-train.apk'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
+  const downloadModal = (
+    <Modal
+      title="下载安卓App"
+      open={downloadModalVisible}
+      onCancel={() => setDownloadModalVisible(false)}
+      footer={null}
+      width={320}
+      centered
+    >
+      <div style={{ textAlign: 'center', padding: '16px 0' }}>
+        <div style={{ marginBottom: 16 }}>
+          <img
+            src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(window.location.origin + '/downloads/app-debug.apk')}`}
+            alt="扫码下载"
+            style={{ width: 200, height: 200, border: '1px solid #f0f0f0', borderRadius: 8 }}
+          />
+        </div>
+        <div style={{ fontSize: 14, color: '#666', marginBottom: 16 }}>
+          📱 扫描二维码，在手机浏览器中打开下载
+        </div>
+        <Button type="primary" icon={<AndroidOutlined />} onClick={handleDownloadApp} block size="large">
+          直接下载 APK
+        </Button>
+        <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>
+          仅支持 Android 设备
+        </div>
+      </div>
+    </Modal>
+  )
 
   const menuItems = [
     {
@@ -353,7 +393,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             <Button
               type="default"
               icon={<AndroidOutlined />}
-              onClick={() => window.open('/downloads/app-debug.apk', '_blank')}
+              onClick={() => setDownloadModalVisible(true)}
               block
               style={{ marginBottom: 8 }}
             >
@@ -373,6 +413,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </Button>
           </div>
         </Drawer>
+        {downloadModal}
         <OnboardingGuide
           open={onboardingVisible}
           onClose={() => setOnboardingVisible(false)}
@@ -460,7 +501,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             <Button
               type="default"
               icon={<AndroidOutlined />}
-              onClick={() => window.open('/downloads/app-debug.apk', '_blank')}
+              onClick={() => setDownloadModalVisible(true)}
               size="small"
             >
               下载App
@@ -534,6 +575,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
           🐂 牛牛提醒：本平台所有数据仅供参考，不构成投资建议。基于日K线数据，投资有风险，入市需谨慎。
         </div>
       </Layout>
+      {downloadModal}
       <OnboardingGuide
         open={onboardingVisible}
         onClose={() => setOnboardingVisible(false)}

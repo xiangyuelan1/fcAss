@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useState, useCallback, useRef, Component } from 'react'
 import {
   Tabs,
   Card,
@@ -50,6 +50,31 @@ import { watchlistApi, dataApi, featureApi } from '@/services/api'
 import { Indicator, Stock, CustomIndicator } from '@/types'
 
 const { Option, OptGroup } = Select
+
+class WatchlistErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: any }
+> {
+  state = { hasError: false, error: null }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🐂</div>
+          <h3>自选股页面出了点问题</h3>
+          <p style={{ color: '#999', margin: '8px 0 16px' }}>牛牛正在修复中，请稍后再试</p>
+          <Button type="primary" onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload() }}>
+            刷新页面
+          </Button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 const EXCHANGE_OPTIONS = [
   { value: '', label: '全部交易所' },
@@ -174,16 +199,17 @@ const WatchlistPage: React.FC = () => {
     setWlLoading(true)
     try {
       const data: any = await watchlistApi.getWatchlists()
-      setWatchlists(data)
-      if (data.length > 0 && !hasAutoExpanded.current) {
+      const safeData = Array.isArray(data) ? data : (data?.items || [])
+      setWatchlists(safeData)
+      if (safeData.length > 0 && !hasAutoExpanded.current) {
         hasAutoExpanded.current = true
-        const first = data[0]
+        const first = safeData[0]
         setDetailId(first.id)
         setDetailName(first.name)
         setDetailLoading(true)
         try {
           const stockData: any = await watchlistApi.getStocks(first.id)
-          setDetailStocks(stockData)
+          setDetailStocks(Array.isArray(stockData) ? stockData : (stockData?.items || []))
         } catch {
           // 首次自动展开获取股票列表失败时静默处理，不影响主流程
         } finally {
@@ -201,7 +227,8 @@ const WatchlistPage: React.FC = () => {
     setAutoPoolLoading(true)
     try {
       const data: any = await dataApi.getAutoPredictPool()
-      setAutoPoolItems(data.items || [])
+      const safeItems = Array.isArray(data) ? data : (data?.items || [])
+      setAutoPoolItems(safeItems)
     } catch {
       message.error('获取自动预测池失败')
     } finally {
@@ -230,8 +257,9 @@ const WatchlistPage: React.FC = () => {
       if (poolIndustry) params.industry = poolIndustry
       if (poolExchange) params.exchange = poolExchange
       const data: any = await dataApi.getStockPool(params)
-      setPoolStocks(data.stocks || [])
-      setPoolTotal(data.total || 0)
+      const safeStocks = Array.isArray(data?.stocks) ? data.stocks : []
+      setPoolStocks(safeStocks)
+      setPoolTotal(data?.total || 0)
     } catch {
       message.error('获取股票池失败')
     } finally {
@@ -242,7 +270,7 @@ const WatchlistPage: React.FC = () => {
   const fetchFeStocks = useCallback(async () => {
     try {
       const data: any = await dataApi.getStocks()
-      setFeStocks(data.slice(0, 100))
+      setFeStocks(Array.isArray(data) ? data.slice(0, 100) : [])
     } catch {
       message.error('获取股票列表失败')
     }
@@ -251,7 +279,7 @@ const WatchlistPage: React.FC = () => {
   const fetchIndicators = useCallback(async () => {
     try {
       const data: any = await featureApi.getIndicators()
-      setIndicators(data)
+      setIndicators(Array.isArray(data) ? data : (data?.items || []))
     } catch {
       message.error('获取指标列表失败')
     }
@@ -269,7 +297,7 @@ const WatchlistPage: React.FC = () => {
   const fetchCustomIndicators = useCallback(async () => {
     try {
       const data: any = await featureApi.getCustomIndicators()
-      setCustomIndicators(data)
+      setCustomIndicators(Array.isArray(data) ? data : (data?.items || []))
     } catch {
       message.error('获取自定义指标失败')
     }
@@ -352,7 +380,7 @@ const WatchlistPage: React.FC = () => {
     setDetailLoading(true)
     try {
       const data: any = await watchlistApi.getStocks(wl.id)
-      setDetailStocks(data)
+      setDetailStocks(Array.isArray(data) ? data : (data?.items || []))
     } catch {
       message.error('获取股票列表失败')
     } finally {
@@ -366,7 +394,7 @@ const WatchlistPage: React.FC = () => {
       await watchlistApi.removeStock(detailId, stockCode)
       message.success('已移除')
       const data: any = await watchlistApi.getStocks(detailId)
-      setDetailStocks(data)
+      setDetailStocks(Array.isArray(data) ? data : (data?.items || []))
       fetchWatchlists()
     } catch {
       message.error('移除失败')
@@ -396,7 +424,7 @@ const WatchlistPage: React.FC = () => {
       await watchlistApi.addStock(detailId, { stock_code: code, stock_name: name })
       message.success(`已添加 ${name}`)
       const data: any = await watchlistApi.getStocks(detailId)
-      setDetailStocks(data)
+      setDetailStocks(Array.isArray(data) ? data : (data?.items || []))
       fetchWatchlists()
     } catch (err: any) {
       const detail = err?.response?.data?.detail
@@ -783,7 +811,11 @@ const WatchlistPage: React.FC = () => {
               }
             >
               <Spin spinning={wlLoading}>
-                {watchlists.length === 0 ? (
+                {wlLoading && watchlists.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
+                    加载中...
+                  </div>
+                ) : watchlists.length === 0 ? (
                   <Empty description="暂无自选表" image={Empty.PRESENTED_IMAGE_SIMPLE}>
                     <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalVisible(true)}>
                       创建第一个自选表
@@ -1763,4 +1795,10 @@ const WatchlistPage: React.FC = () => {
   )
 }
 
-export default WatchlistPage
+export default function WatchlistPageWrapper() {
+  return (
+    <WatchlistErrorBoundary>
+      <WatchlistPage />
+    </WatchlistErrorBoundary>
+  )
+}

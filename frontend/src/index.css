@@ -151,3 +151,56 @@ body {
     font-size: 24px;
   }
 }
+
+/* ===== 登录页暗色主题输入框 ===== */
+.ant-input-affix-wrapper > input.ant-input {
+  background: transparent !important;
+}
+
+/* ===== 全局圆角优化 ===== */
+.ant-btn-lg {
+  border-radius: 10px;
+}
+
+.ant-card {
+  border-radius: 12px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ant-card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+/* ===== 移动端优化 ===== */
+@media (max-width: 768px) {
+  .ant-modal {
+    max-width: calc(100vw - 32px);
+    margin: 16px auto;
+  }
+
+  .ant-card {
+    border-radius: 10px;
+  }
+
+  .ant-btn {
+    border-radius: 8px;
+  }
+}
+
+/* ===== 平滑过渡 ===== */
+.ant-layout-sider,
+.ant-menu-item,
+.ant-btn {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ===== 标签页动画 ===== */
+.ant-tabs-tab {
+  transition: all 0.2s ease;
+}
+
+/* ===== 进度条动画 ===== */
+.ant-progress-bg {
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+}
