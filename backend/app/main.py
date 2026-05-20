@@ -3,7 +3,9 @@ FastAPI应用主入口
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+import os
 
 from app.core.config import settings
 from app.core.database import init_db, _migrate_db, SessionLocal, Base
@@ -108,6 +110,14 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
 
+    # 挂载APK下载目录为静态文件服务
+    apk_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "frontend", "android", "app", "build", "outputs", "apk", "debug",
+    )
+    if os.path.exists(apk_dir):
+        app.mount("/downloads", StaticFiles(directory=apk_dir), name="downloads")
+
     return app
 
 
@@ -116,11 +126,39 @@ app = create_app()
 
 @app.get("/")
 async def root():
+    apk_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "frontend", "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk",
+    )
+    apk_available = os.path.exists(apk_path)
     return {
         "name": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "docs": "/docs",
-        "api": "/api"
+        "api": "/api",
+        "android_app": {
+            "available": apk_available,
+            "download_url": "/downloads/app-debug.apk" if apk_available else None,
+        },
+    }
+
+
+@app.get("/api/app/download")
+async def get_app_download():
+    """查询安卓App下载信息"""
+    apk_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "frontend", "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk",
+    )
+    apk_available = os.path.exists(apk_path)
+    apk_size = os.path.getsize(apk_path) if apk_available else 0
+    return {
+        "available": apk_available,
+        "download_url": "/downloads/app-debug.apk" if apk_available else None,
+        "file_size": apk_size,
+        "file_size_mb": round(apk_size / 1024 / 1024, 1) if apk_available else 0,
+        "version": settings.APP_VERSION,
+        "platform": "android",
     }
 
 

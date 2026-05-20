@@ -372,6 +372,7 @@ const BacktestGuide: React.FC = () => (
 )
 
 const TrainingPredict: React.FC = () => {
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -1386,6 +1387,7 @@ const TrainingPredict: React.FC = () => {
           rowKey="id"
           loading={trainingLoading}
           pagination={{ pageSize: 10 }}
+          scroll={{ x: 900 }}
           locale={{
             emptyText: (
               <div style={{ padding: '24px 0' }}>
@@ -1408,7 +1410,7 @@ const TrainingPredict: React.FC = () => {
       if (targetType === 'next_day_direction') {
         return (
           <>
-            <Col span={12}>
+            <Col xs={24} sm={12}>
               <Card>
                 <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>上涨概率</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1427,7 +1429,7 @@ const TrainingPredict: React.FC = () => {
                 </div>
               </Card>
             </Col>
-            <Col span={12}>
+            <Col xs={24} sm={12}>
               <Card>
                 <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>下跌概率</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1453,7 +1455,7 @@ const TrainingPredict: React.FC = () => {
       if (targetType === 'price_change_5d') {
         return (
           <>
-            <Col span={12}>
+            <Col xs={24} sm={12}>
               <Card>
                 <Statistic
                   title="5日累计变化"
@@ -1465,7 +1467,7 @@ const TrainingPredict: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col span={12}>
+            <Col xs={24} sm={12}>
               <Card>
                 <Statistic
                   title="日均变化率"
@@ -1483,7 +1485,7 @@ const TrainingPredict: React.FC = () => {
       if (targetType === 'multi_feature_next_day') {
         return (
           <>
-            <Col span={8}>
+            <Col xs={24} sm={8}>
               <Card>
                 <Statistic
                   title="预测收益率"
@@ -1495,7 +1497,7 @@ const TrainingPredict: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col span={8}>
+            <Col xs={24} sm={8}>
               <Card>
                 <Statistic
                   title="预测波动率"
@@ -1505,7 +1507,7 @@ const TrainingPredict: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col span={8}>
+            <Col xs={24} sm={8}>
               <Card>
                 <Statistic
                   title="预测量变率"
@@ -1522,22 +1524,22 @@ const TrainingPredict: React.FC = () => {
       if (targetType === 'next_day_ohlc') {
         return (
           <>
-            <Col span={6}>
+            <Col xs={12} sm={6}>
               <Card>
                 <Statistic title="预测开盘价" value={latest.predicted_open ?? 0} precision={2} prefix="¥" />
               </Card>
             </Col>
-            <Col span={6}>
+            <Col xs={12} sm={6}>
               <Card>
                 <Statistic title="预测最高价" value={latest.predicted_high ?? 0} precision={2} prefix="¥" valueStyle={{ color: '#f5222d' }} />
               </Card>
             </Col>
-            <Col span={6}>
+            <Col xs={12} sm={6}>
               <Card>
                 <Statistic title="预测最低价" value={latest.predicted_low ?? 0} precision={2} prefix="¥" valueStyle={{ color: '#52c41a' }} />
               </Card>
             </Col>
-            <Col span={6}>
+            <Col xs={12} sm={6}>
               <Card>
                 <Statistic title="预测收盘价" value={latest.predicted_close ?? 0} precision={2} prefix="¥" />
               </Card>
@@ -1551,7 +1553,7 @@ const TrainingPredict: React.FC = () => {
         const trendDown = latest.trend_direction === '下跌'
         return (
           <>
-            <Col span={8}>
+            <Col xs={24} sm={8}>
               <Card>
                 <Statistic
                   title="预测趋势"
@@ -1561,7 +1563,7 @@ const TrainingPredict: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col span={8}>
+            <Col xs={24} sm={8}>
               <Card>
                 <Statistic
                   title="预测幅度"
@@ -1572,7 +1574,7 @@ const TrainingPredict: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col span={8}>
+            <Col xs={24} sm={8}>
               <Card>
                 <Statistic
                   title="预测周期"
@@ -1588,7 +1590,7 @@ const TrainingPredict: React.FC = () => {
       if (targetType === 'time_to_gain_pct') {
         return (
           <>
-            <Col span={12}>
+            <Col xs={24} sm={12}>
               <Card>
                 <Statistic
                   title="预计所需时间"
@@ -1599,7 +1601,7 @@ const TrainingPredict: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col span={12}>
+            <Col xs={24} sm={12}>
               <Card>
                 <Statistic
                   title="目标涨幅"
@@ -1615,7 +1617,7 @@ const TrainingPredict: React.FC = () => {
 
       return (
         <>
-          <Col span={12}>
+          <Col xs={24} sm={12}>
             <Card>
               <Statistic
                 title="预测目标价格"
@@ -1626,7 +1628,7 @@ const TrainingPredict: React.FC = () => {
               />
             </Card>
           </Col>
-          <Col span={12}>
+          <Col xs={24} sm={12}>
             <Card>
               <Statistic
                 title="预测涨跌幅"
@@ -1706,7 +1708,7 @@ const TrainingPredict: React.FC = () => {
           </Row>
 
           {selectedPredictModel && (
-            <Descriptions size="small" bordered column={3} style={{ marginTop: 16 }}>
+            <Descriptions size="small" bordered column={{ xs: 1, sm: 2, md: 3 }} style={{ marginTop: 16 }}>
               <Descriptions.Item label="模型类型">{selectedPredictModel.model_type.toUpperCase()}</Descriptions.Item>
               <Descriptions.Item label="预测目标">
                 {selectedPredictModel.target === 'next_day_return' ? '次日收益率' :
@@ -1723,7 +1725,7 @@ const TrainingPredict: React.FC = () => {
             </Descriptions>
           )}
 
-          <div style={{ marginTop: 16, display: 'flex', gap: 12 }}>
+          <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <Button
               type="primary"
               icon={<ThunderboltOutlined />}
@@ -1811,7 +1813,7 @@ const TrainingPredict: React.FC = () => {
                       </Card>
                     </Col>
                     {renderTargetSpecificCards(latestResult)}
-                    <Col span={12}>
+                    <Col xs={24} sm={12}>
                       <Card>
                         <Statistic
                           title="最新收盘价"
@@ -1824,7 +1826,7 @@ const TrainingPredict: React.FC = () => {
                         </div>
                       </Card>
                     </Col>
-                    <Col span={12}>
+                    <Col xs={24} sm={12}>
                       <Card>
                         <div style={{ marginBottom: 8, fontWeight: 500, color: '#666' }}>置信度</div>
                         <ConfidenceBar confidence={confidence} />
@@ -1869,7 +1871,7 @@ const TrainingPredict: React.FC = () => {
                   size="small"
                 >
                   <Row gutter={[16, 12]}>
-                    <Col span={4}>
+                    <Col xs={8} sm={4}>
                       <Statistic
                         title="当前价"
                         value={realtimeQuote.price}
@@ -1878,7 +1880,7 @@ const TrainingPredict: React.FC = () => {
                         valueStyle={realtimeQuote.change_pct > 0 ? { color: '#f5222d' } : realtimeQuote.change_pct < 0 ? { color: '#52c41a' } : undefined}
                       />
                     </Col>
-                    <Col span={4}>
+                    <Col xs={8} sm={4}>
                       <Statistic
                         title="涨跌幅"
                         value={realtimeQuote.change_pct}
@@ -1888,10 +1890,10 @@ const TrainingPredict: React.FC = () => {
                         prefix={realtimeQuote.change_pct > 0 ? <ArrowUpOutlined /> : realtimeQuote.change_pct < 0 ? <ArrowDownOutlined /> : undefined}
                       />
                     </Col>
-                    <Col span={4}><Statistic title="开盘" value={realtimeQuote.open} precision={2} prefix="¥" /></Col>
-                    <Col span={4}><Statistic title="最高" value={realtimeQuote.high} precision={2} prefix="¥" /></Col>
-                    <Col span={4}><Statistic title="最低" value={realtimeQuote.low} precision={2} prefix="¥" /></Col>
-                    <Col span={4}><Statistic title="昨收" value={realtimeQuote.pre_close} precision={2} prefix="¥" /></Col>
+                    <Col xs={8} sm={4}><Statistic title="开盘" value={realtimeQuote.open} precision={2} prefix="¥" /></Col>
+                    <Col xs={8} sm={4}><Statistic title="最高" value={realtimeQuote.high} precision={2} prefix="¥" /></Col>
+                    <Col xs={8} sm={4}><Statistic title="最低" value={realtimeQuote.low} precision={2} prefix="¥" /></Col>
+                    <Col xs={8} sm={4}><Statistic title="昨收" value={realtimeQuote.pre_close} precision={2} prefix="¥" /></Col>
                   </Row>
                   <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
                     行情时间: {realtimeQuote.time || '-'}
@@ -1927,6 +1929,7 @@ const TrainingPredict: React.FC = () => {
               rowKey="stock_code"
               pagination={false}
               size="small"
+              scroll={{ x: 700 }}
             />
             <Alert
               style={{ marginTop: 16 }}
@@ -1971,6 +1974,7 @@ const TrainingPredict: React.FC = () => {
                     pagination={false}
                     dataSource={records}
                     rowKey="timestamp"
+                    scroll={{ x: 800 }}
                     columns={[
                       {
                         title: '模型',
@@ -2113,7 +2117,7 @@ const TrainingPredict: React.FC = () => {
         title={`任务详情 #${selectedTask?.id}`}
         open={detailModalVisible}
         onCancel={() => setDetailModalVisible(false)}
-        width={900}
+        width={isMobile ? '100%' : 900}
         footer={[
           selectedTask?.status === 'completed' && (
             <Button
@@ -2153,7 +2157,7 @@ const TrainingPredict: React.FC = () => {
               label: '基本信息',
               children: (
                 <>
-                  <Descriptions bordered column={2}>
+                  <Descriptions bordered column={{ xs: 1, sm: 2 }}>
                     <Descriptions.Item label="任务ID">{selectedTask.id}</Descriptions.Item>
                     <Descriptions.Item label="模型ID">{selectedTask.model_id}</Descriptions.Item>
                     <Descriptions.Item label="状态">
@@ -2268,7 +2272,7 @@ const TrainingPredict: React.FC = () => {
           <Button key="cancel" onClick={() => setBacktestModalVisible(false)}>取消</Button>,
           <Button key="ok" type="primary" onClick={handleRunBacktest}>开始回测</Button>,
         ]}
-        width={600}
+        width={isMobile ? '100%' : 600}
       >
         {backtestLoading ? (
           <div style={{ padding: '20px 0' }}>
@@ -2335,7 +2339,7 @@ const TrainingPredict: React.FC = () => {
         title={`回测详情 #${selectedBacktestResult?.id}`}
         open={backtestDetailModalVisible}
         onCancel={() => setBacktestDetailModalVisible(false)}
-        width={1000}
+        width={isMobile ? '100%' : 1000}
         footer={[
           <Button key="close" onClick={() => setBacktestDetailModalVisible(false)}>
             关闭

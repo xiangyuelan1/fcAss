@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Layout, Menu, Button, Modal, theme, Dropdown, Avatar, Space, Badge } from 'antd'
+import { Layout, Menu, Button, Modal, theme, Dropdown, Avatar, Space, Badge, Drawer } from 'antd'
 import {
   DashboardOutlined,
   RobotOutlined,
@@ -20,6 +20,7 @@ import {
   QuestionCircleOutlined,
   StarOutlined,
   BellOutlined,
+  AndroidOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/store'
@@ -36,6 +37,7 @@ interface AppLayoutProps {
 const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const [collapsed, setCollapsed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   const [onboardingVisible, setOnboardingVisible] = useState(false)
   const [disclaimerVisible, setDisclaimerVisible] = useState(false)
   const [onlineCount, setOnlineCount] = useState<number>(0)
@@ -70,6 +72,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   // 路由切换时关闭移动端抽屉
   useEffect(() => {
+    setDrawerOpen(false)
   }, [location.pathname])
 
   // 心跳上报与在线人数轮询、未读消息计数轮询
@@ -232,7 +235,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             <Button
               type="text"
               icon={<MenuUnfoldOutlined />}
-              onClick={() => setCollapsed(false)}
+              onClick={() => setDrawerOpen(true)}
               style={{ fontSize: '18px' }}
             />
           </div>
@@ -324,6 +327,52 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
         }}>
           🐂 仅供参考，牛牛不对投资决策负责~
         </div>
+        <Drawer
+          title="菜单"
+          placement="right"
+          onClose={() => setDrawerOpen(false)}
+          open={drawerOpen}
+          width={280}
+          styles={{ body: { padding: 0 } }}
+        >
+          <Menu
+            theme="light"
+            mode="inline"
+            selectedKeys={[location.pathname]}
+            items={menuItems}
+            onClick={({ key }) => {
+              handleMenuClick(key)
+              setDrawerOpen(false)
+            }}
+          />
+          <div style={{ padding: '16px 24px', borderTop: '1px solid #f0f0f0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#1890ff' }} />
+              <span>{user?.username}</span>
+            </div>
+            <Button
+              type="default"
+              icon={<AndroidOutlined />}
+              onClick={() => window.open('/downloads/app-debug.apk', '_blank')}
+              block
+              style={{ marginBottom: 8 }}
+            >
+              下载安卓App
+            </Button>
+            <Button
+              type="text"
+              icon={<LogoutOutlined />}
+              danger
+              onClick={() => {
+                logout()
+                navigate('/login')
+              }}
+              block
+            >
+              退出登录
+            </Button>
+          </div>
+        </Drawer>
         <OnboardingGuide
           open={onboardingVisible}
           onClose={() => setOnboardingVisible(false)}
@@ -408,6 +457,14 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <Button
+              type="default"
+              icon={<AndroidOutlined />}
+              onClick={() => window.open('/downloads/app-debug.apk', '_blank')}
+              size="small"
+            >
+              下载App
+            </Button>
             <Badge count={unreadCount} size="small" offset={[2, -2]}>
               <Button
                 type="text"
