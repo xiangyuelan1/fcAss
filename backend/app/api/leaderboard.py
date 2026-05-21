@@ -13,7 +13,7 @@ from app.core.database import get_db
 from app.models.prediction_share import PredictionShare
 from app.models.user import User
 
-router = APIRouter(prefix="/api/leaderboard", tags=["排行榜"])
+router = APIRouter(prefix="/leaderboard", tags=["排行榜"])
 
 
 def _period_start(period: str) -> datetime:

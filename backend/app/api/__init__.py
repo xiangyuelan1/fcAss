@@ -2,7 +2,7 @@
 API路由模块
 """
 from fastapi import APIRouter
-from app.api import auth, data, features, models, training, backtest, payment, prediction, admin, community, pk, points, messages, guide, watchlist, daily_guess, social, ensemble, recommendations, paper_trading
+from app.api import auth, data, features, models, training, backtest, payment, prediction, admin, community, pk, points, messages, guide, watchlist, daily_guess, social, ensemble, signals, leaderboard, recommendations, paper_trading
 
 api_router = APIRouter(prefix="/api")
 
