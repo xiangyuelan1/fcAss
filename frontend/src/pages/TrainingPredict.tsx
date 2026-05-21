@@ -49,9 +49,10 @@ import {
   QuestionCircleOutlined,
   ShareAltOutlined,
   PlusOutlined,
+  FundOutlined,
 } from '@ant-design/icons'
 import { Line } from '@ant-design/charts'
-import { trainingApi, modelApi, backtestApi, predictionApi, dataApi, watchlistApi } from '@/services/api'
+import { trainingApi, modelApi, backtestApi, predictionApi, dataApi, watchlistApi, ensembleApi, featureImportanceApi } from '@/services/api'
 import { TrainingTask, UserModel, BacktestResult, EquityPoint } from '@/types'
 import { PredictionResult, PredictionAnimation, ConfidenceBar, deriveConfidence, labelToDirection } from '@/components/PredictionFun'
 import { TrainingCompleteEffect } from '@/components/TrainingCompleteEffect'
@@ -433,6 +434,15 @@ const TrainingPredict: React.FC = () => {
   const [backtestDetailModalVisible, setBacktestDetailModalVisible] = useState(false)
   const [backtestDetailLoading, setBacktestDetailLoading] = useState(false)
 
+  const [ensembleModels, setEnsembleModels] = useState<any[]>([])
+  const [ensembleWeights, setEnsembleWeights] = useState<number[]>([])
+  const [ensembleResult, setEnsembleResult] = useState<any>(null)
+  const [ensembleLoading, setEnsembleLoading] = useState(false)
+  const [ensembleStock, setEnsembleStock] = useState<string | undefined>()
+
+  const [featureImportance, setFeatureImportance] = useState<[string, number][] | null>(null)
+  const [featureImportanceLoading, setFeatureImportanceLoading] = useState(false)
+
   useEffect(() => {
     fetchTasks()
     fetchModels()
@@ -676,7 +686,11 @@ const TrainingPredict: React.FC = () => {
   const handleViewDetail = async (task: TrainingTask) => {
     setSelectedTask(task)
     setDetailModalVisible(true)
+    setFeatureImportance(null)
     fetchLogs(task.id)
+    if (task.status === 'completed') {
+      handleFetchFeatureImportance(task.model_id)
+    }
   }
 
   const handleOpenBacktest = (task: TrainingTask) => {
@@ -951,6 +965,49 @@ const TrainingPredict: React.FC = () => {
       }
     } finally {
       setSharingPrediction(false)
+    }
+  }
+
+  const handleEnsemblePredict = async () => {
+    if (ensembleModels.length < 2) {
+      message.warning('请至少选择2个模型')
+      return
+    }
+    if (!ensembleStock) {
+      message.warning('请选择预测股票')
+      return
+    }
+    setEnsembleLoading(true)
+    setEnsembleResult(null)
+    try {
+      const data: any = await ensembleApi.ensemblePredict({
+        task_ids: ensembleModels.map(m => m.id),
+        weights: ensembleWeights.length === ensembleModels.length ? ensembleWeights : undefined,
+        stock_code: ensembleStock,
+      })
+      setEnsembleResult(data)
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      if (typeof detail === 'string') {
+        message.error(detail)
+      } else {
+        message.error('组合预测失败')
+      }
+    } finally {
+      setEnsembleLoading(false)
+    }
+  }
+
+  const handleFetchFeatureImportance = async (modelId: number) => {
+    setFeatureImportanceLoading(true)
+    setFeatureImportance(null)
+    try {
+      const data: any = await featureImportanceApi.getFeatureImportance(modelId)
+      setFeatureImportance(data.importance || [])
+    } catch {
+      setFeatureImportance(null)
+    } finally {
+      setFeatureImportanceLoading(false)
     }
   }
 
@@ -1686,6 +1743,125 @@ const TrainingPredict: React.FC = () => {
                 </Card>
               ),
             },
+            {
+              key: 'ensemble',
+              label: '🔀 组合预测（多模型加权）',
+              children: (
+                <Card size="small">
+                  <div style={{ marginBottom: 12 }}>
+                    <span style={{ color: '#999' }}>选择多个已完成的训练任务，加权组合预测结果。所有模型的预测目标需一致。</span>
+                  </div>
+                  <div style={{ marginBottom: 8, fontWeight: 500 }}>选择训练任务（至少2个）</div>
+                  <Select
+                    mode="multiple"
+                    placeholder="选择已完成的训练任务"
+                    style={{ width: '100%', marginBottom: 8 }}
+                    value={ensembleModels.map(m => m.id)}
+                    onChange={(ids: number[]) => {
+                      const selected = completedTasks.filter(t => ids.includes(t.id))
+                      setEnsembleModels(selected)
+                      setEnsembleWeights(selected.map(() => 1.0 / Math.max(selected.length, 1)))
+                      setEnsembleResult(null)
+                    }}
+                    options={completedTasks.map(t => {
+                      const m = models[t.model_id]
+                      return {
+                        label: `任务#${t.id} - ${m ? `${m.name} (${m.model_type.toUpperCase()})` : `模型#${t.model_id}`}`,
+                        value: t.id,
+                      }
+                    })}
+                  />
+                  {ensembleModels.length >= 2 && (
+                    <>
+                      <div style={{ marginBottom: 8, fontWeight: 500 }}>权重配置</div>
+                      {ensembleModels.map((t, i) => {
+                        const m = models[t.model_id]
+                        return (
+                          <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            <span style={{ flex: 1, fontSize: 12 }}>
+                              {m ? `${m.name} (${m.model_type.toUpperCase()})` : `任务#${t.id}`}
+                            </span>
+                            <InputNumber
+                              min={0.1} max={5} step={0.1}
+                              value={ensembleWeights[i]}
+                              onChange={v => {
+                                const nw = [...ensembleWeights]
+                                nw[i] = v || 1
+                                setEnsembleWeights(nw)
+                              }}
+                              style={{ width: 80 }}
+                              size="small"
+                            />
+                          </div>
+                        )
+                      })}
+                      <div style={{ marginBottom: 8, fontWeight: 500, marginTop: 12 }}>预测股票</div>
+                      <AutoComplete
+                        placeholder="输入股票代码（如 000858）"
+                        value={ensembleStock}
+                        onChange={(value) => setEnsembleStock(value)}
+                        style={{ width: '100%', marginBottom: 12 }}
+                        options={predictableStocks.map((stock) => ({
+                          value: stock.code,
+                          label: `${stock.code} - ${stock.name}`,
+                        }))}
+                        filterOption={(inputValue, option) =>
+                          option!.value.toLowerCase().includes(inputValue.toLowerCase()) ||
+                          option!.label.toLowerCase().includes(inputValue.toLowerCase())
+                        }
+                      />
+                      <Button type="primary" onClick={handleEnsemblePredict} loading={ensembleLoading}>
+                        组合预测
+                      </Button>
+                    </>
+                  )}
+                  {ensembleResult && (
+                    <Card
+                      size="small"
+                      style={{
+                        marginTop: 12,
+                        borderLeft: `3px solid ${ensembleResult.ensemble_direction === 'up' ? '#f5222d' : ensembleResult.ensemble_direction === 'down' ? '#52c41a' : '#faad14'}`,
+                      }}
+                    >
+                      <div style={{
+                        fontSize: 20,
+                        fontWeight: 700,
+                        color: ensembleResult.ensemble_direction === 'up' ? '#f5222d' : ensembleResult.ensemble_direction === 'down' ? '#52c41a' : '#faad14',
+                      }}>
+                        {ensembleResult.ensemble_direction === 'up' ? '看涨 ↑' : ensembleResult.ensemble_direction === 'down' ? '看跌 ↓' : '震荡 -'}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+                        综合预测值 {ensembleResult.ensemble_prediction} · 置信度 {Math.round(ensembleResult.ensemble_confidence * 100)}%
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 11, color: '#666' }}>
+                        {ensembleResult.models.map((m: any) => `${m.model_name}: ${Math.round(m.weight * 100)}%`).join(' + ')}
+                      </div>
+                      <Collapse
+                        ghost
+                        size="small"
+                        style={{ marginTop: 8 }}
+                        items={[{
+                          key: 'detail',
+                          label: '各模型详情',
+                          children: (
+                            <div>
+                              {ensembleResult.models.map((m: any) => (
+                                <div key={m.task_id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                                  <span>{m.model_name} ({m.model_type.toUpperCase()})</span>
+                                  <span>
+                                    预测: {m.prediction} · 置信度: {Math.round(m.confidence * 100)}% · 权重: {Math.round(m.weight * 100)}%
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          ),
+                        }]}
+                      />
+                    </Card>
+                  )}
+                </Card>
+              ),
+            },
           ]}
         />
 
@@ -2026,6 +2202,20 @@ const TrainingPredict: React.FC = () => {
           ),
           selectedTask?.status === 'completed' && (
             <Button
+              key="paper-trading"
+              icon={<FundOutlined />}
+              onClick={() => {
+                Modal.info({
+                  title: '📊 模拟盘交易',
+                  content: '模拟盘功能即将上线！系统将根据模型预测自动执行虚拟交易，记录真实收益表现。',
+                })
+              }}
+            >
+              模拟盘
+            </Button>
+          ),
+          selectedTask?.status === 'completed' && (
+            <Button
               key="predict"
               type="primary"
               icon={<ThunderboltOutlined />}
@@ -2098,6 +2288,48 @@ const TrainingPredict: React.FC = () => {
                     </div>
                   )}
                 </>
+              ),
+            },
+            {
+              key: 'feature-importance',
+              label: (
+                <Space>
+                  <InfoCircleOutlined />
+                  特征重要性
+                </Space>
+              ),
+              children: featureImportanceLoading ? (
+                <div style={{ textAlign: 'center', padding: 40 }}>
+                  <LoadingOutlined style={{ fontSize: 24 }} /> 加载中...
+                </div>
+              ) : featureImportance && featureImportance.length > 0 ? (
+                <div>
+                  <div style={{ marginBottom: 12, color: '#666', fontSize: 13 }}>
+                    Top 10 特征重要性（归一化后，总和为1）
+                  </div>
+                  {featureImportance.slice(0, 10).map(([name, value]: [string, number]) => (
+                    <div key={name} style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ width: 140, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>
+                        {name}
+                      </span>
+                      <div style={{ flex: 1, height: 16, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{ width: `${value * 100}%`, height: '100%', background: 'linear-gradient(90deg, #1890ff, #722ed1)', borderRadius: 4 }} />
+                      </div>
+                      <span style={{ width: 55, textAlign: 'right', fontSize: 11, color: '#666' }}>
+                        {(value * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  ))}
+                  {featureImportance.length > 10 && (
+                    <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>
+                      共 {featureImportance.length} 个特征，仅展示 Top 10
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+                  特征重要性数据不可用（模型训练时未计算或模型类型不支持）
+                </div>
               ),
             },
             {

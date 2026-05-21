@@ -12,6 +12,7 @@ from datetime import datetime
 
 from app.core.database import get_db
 from app.services.model_service import ModelService
+from app.services.training_service import ModelCheckpoint
 from app.models.payment import PaymentConfig
 from app.auth import get_current_active_user
 from app.models.user import User as UserModel
@@ -726,3 +727,46 @@ async def unfavorite_model(
         pref.favorited_at = None
         db.commit()
     return {"success": True, "message": f"模型已取消收藏"}
+
+
+@router.get("/{model_id}/feature-importance")
+async def get_feature_importance(
+    model_id: int,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """获取模型的特征重要性数据，需验证所有权
+    
+    从模型最近一次训练的检查点中读取 feature_importance 字段，
+    按重要性降序返回。仅已训练完成的模型才有此数据。
+    """
+    model = db.query(UserTableModel).filter(UserTableModel.id == model_id).first()
+    if not model:
+        raise HTTPException(status_code=404, detail=f"模型 {model_id} 不存在")
+    _verify_model_ownership(model, current_user)
+
+    # 查找该模型最近完成的训练任务
+    from app.models.training import TrainingTask
+    task = db.query(TrainingTask).filter(
+        TrainingTask.model_id == model_id,
+        TrainingTask.status == 'completed',
+    ).order_by(TrainingTask.end_time.desc()).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="该模型尚无已完成的训练任务")
+
+    try:
+        meta = ModelCheckpoint.load_checkpoint_metadata(task.id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="模型检查点不存在")
+
+    importance = meta.get('feature_importance', {})
+    if not importance:
+        raise HTTPException(status_code=404, detail="特征重要性数据不可用（模型训练时未计算或模型类型不支持）")
+
+    sorted_imp = sorted(importance.items(), key=lambda x: x[1], reverse=True)
+    return {
+        "importance": sorted_imp,
+        "total_features": len(sorted_imp),
+        "task_id": task.id,
+        "model_type": meta.get('model_type', model.model_type),
+    }

@@ -183,16 +183,32 @@ export const useBacktestStore = create<BacktestState>((set) => ({
 // 全局应用状态
 interface AppState {
   collapsed: boolean;
-  theme: 'light' | 'dark';
   setCollapsed: (collapsed: boolean) => void;
-  setTheme: (theme: 'light' | 'dark') => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
   collapsed: false,
-  theme: 'light',
   setCollapsed: (collapsed) => set({ collapsed }),
-  setTheme: (theme) => set({ theme }),
+}));
+
+// 主题状态
+interface ThemeStore {
+  isDark: boolean;
+  toggleTheme: () => void;
+  setDark: (dark: boolean) => void;
+}
+
+export const useThemeStore = create<ThemeStore>((set) => ({
+  isDark: localStorage.getItem('theme') === 'dark',
+  toggleTheme: () => set((state) => {
+    const next = !state.isDark;
+    localStorage.setItem('theme', next ? 'dark' : 'light');
+    return { isDark: next };
+  }),
+  setDark: (dark) => {
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+    set({ isDark: dark });
+  },
 }));
 
 // 预测结果状态

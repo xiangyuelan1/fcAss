@@ -16,6 +16,7 @@ import {
   Modal,
   Input,
   Radio,
+  Skeleton,
 } from 'antd'
 import {
   PlusOutlined,
@@ -41,9 +42,11 @@ import { UserModel } from '@/types'
 import MascotBull from '@/components/MascotBull'
 
 const ModelList: React.FC = () => {
+  const isMobile = window.innerWidth < 768
   const navigate = useNavigate()
   const [models, setModels] = useState<UserModel[]>([])
   const [loading, setLoading] = useState(false)
+  const [initialLoading, setInitialLoading] = useState(true)
   const [filter, setFilter] = useState<string>('全部')
   const [publishedModelIds, setPublishedModelIds] = useState<Set<number>>(new Set())
 
@@ -55,8 +58,11 @@ const ModelList: React.FC = () => {
   const [publishing, setPublishing] = useState(false)
 
   useEffect(() => {
-    fetchModels()
-    fetchPublishedModelIds()
+    const init = async () => {
+      await Promise.all([fetchModels(), fetchPublishedModelIds()])
+      setInitialLoading(false)
+    }
+    init()
   }, [])
 
   const fetchModels = async () => {
@@ -391,6 +397,23 @@ const ModelList: React.FC = () => {
   const trainedCount = models.filter((m) => m.status === 'trained').length
   const deployedCount = models.filter((m) => m.status === 'deployed').length
 
+  if (initialLoading) {
+    return (
+      <div>
+        <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+          {[1, 2, 3].map((i) => (
+            <Col xs={24} sm={8} key={i}>
+              <Card><Skeleton active paragraph={{ rows: 1 }} /></Card>
+            </Col>
+          ))}
+        </Row>
+        <Card>
+          <Skeleton active paragraph={{ rows: 6 }} />
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div>
       <h1 className="page-title">模型管理</h1>
@@ -456,6 +479,7 @@ const ModelList: React.FC = () => {
           rowKey="id"
           loading={loading}
           pagination={{ pageSize: 10 }}
+          scroll={{ x: 1200 }}
           locale={{
             emptyText: (
               <div style={{ padding: '24px 0' }}>
@@ -474,7 +498,7 @@ const ModelList: React.FC = () => {
         onOk={handlePublish}
         confirmLoading={publishing}
         okText="发布"
-        width={480}
+        width={isMobile ? '100%' : 480}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div>

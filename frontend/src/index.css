@@ -204,3 +204,28 @@ body {
 .ant-progress-bg {
   transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* ===== 深色模式全局适配 ===== */
+body.dark-mode {
+  background-color: #141414;
+}
+
+/* 深色模式下自定义组件适配 */
+.dark-mode .ant-table {
+  background: transparent;
+}
+
+/* 深色模式下移动端底部导航栏 */
+.dark-mode .ant-layout-content {
+  transition: background-color 0.3s, color 0.3s;
+}
+
+/* 深色模式切换过渡动画 */
+.ant-btn,
+.ant-card,
+.ant-layout,
+.ant-layout-sider,
+.ant-layout-content,
+.ant-layout-header {
+  transition: background-color 0.3s, color 0.3s, border-color 0.3s;
+}

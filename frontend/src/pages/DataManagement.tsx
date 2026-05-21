@@ -20,7 +20,6 @@ import {
   Popconfirm,
 } from 'antd'
 import {
-  PlusOutlined,
   SearchOutlined,
   CloudDownloadOutlined,
   CheckCircleOutlined,
@@ -37,6 +36,7 @@ import { dataApi } from '@/services/api'
 import { Stock } from '@/types'
 
 const DataManagement: React.FC = () => {
+  const isMobile = window.innerWidth < 768
   const [stocks, setStocks] = useState<Stock[]>([])
   const [loading, setLoading] = useState(false)
   const [fetchModalVisible, setFetchModalVisible] = useState(false)
@@ -363,17 +363,17 @@ const DataManagement: React.FC = () => {
       </p>
 
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={8}>
+        <Col xs={24} sm={8}>
           <Card size="small">
             <Statistic title="已入库股票" value={stocks.length} suffix="只" prefix={<DatabaseOutlined />} />
           </Card>
         </Col>
-        <Col span={8}>
+        <Col xs={24} sm={8}>
           <Card size="small">
             <Statistic title="总数据量" value={totalPrices} suffix="条" prefix={<DatabaseOutlined />} />
           </Card>
         </Col>
-        <Col span={8}>
+        <Col xs={24} sm={8}>
           <Card size="small">
             <Statistic
               title="有数据的股票"
@@ -430,13 +430,6 @@ const DataManagement: React.FC = () => {
             >
               一键更新所有数据
             </Button>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => setFetchModalVisible(true)}
-            >
-              获取股票数据
-            </Button>
           </Space>
         }
       >
@@ -447,6 +440,7 @@ const DataManagement: React.FC = () => {
           loading={loading}
           pagination={{ pageSize: 10 }}
           size="middle"
+          scroll={{ x: 800 }}
           locale={{ emptyText: '暂无股票数据，点击上方"获取股票数据"按钮开始' }}
         />
       </Card>
@@ -462,7 +456,7 @@ const DataManagement: React.FC = () => {
           }
         }}
         footer={null}
-        width={520}
+        width={isMobile ? '100%' : 520}
       >
         {!fetching && !fetchResult ? (
           <Form form={fetchForm} onFinish={handleFetchStock}>

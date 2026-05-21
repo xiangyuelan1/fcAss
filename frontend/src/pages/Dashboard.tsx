@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Row, Col, Card, Statistic, List, Tag, Button, Steps, Alert, message, Divider, Collapse, Switch } from 'antd'
+import { Row, Col, Card, Statistic, List, Tag, Button, Steps, Alert, message, Divider, Collapse, Switch, Skeleton } from 'antd'
 import {
   DatabaseOutlined,
   RobotOutlined,
@@ -16,11 +16,12 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { dataApi, modelApi, trainingApi, backtestApi, predictionApi, authApi } from '@/services/api'
+import { dataApi, modelApi, trainingApi, backtestApi, predictionApi, authApi, signalsApi } from '@/services/api'
 import { UserModel, TrainingTask, PredictionShareItem } from '@/types'
 import { useAuthStore } from '@/store'
 import OnboardingGuide, { isOnboardingCompleted } from '@/components/OnboardingGuide'
 import MascotBull from '@/components/MascotBull'
+import { marketWs } from '@/services/websocket'
 
 interface StaleModel {
   model_id: number
@@ -48,10 +49,24 @@ const Dashboard: React.FC = () => {
   const [syncing, setSyncing] = useState(false)
   const [onboardingVisible, setOnboardingVisible] = useState(false)
   const [myPredictions, setMyPredictions] = useState<PredictionShareItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [liveQuotes, setLiveQuotes] = useState<any[]>([])
+  const [signals, setSignals] = useState<any[]>([])
 
   useEffect(() => {
-    fetchDashboardData()
-    fetchMyPredictions()
+    const init = async () => {
+      setLoading(true)
+      await Promise.all([fetchDashboardData(), fetchMyPredictions(), fetchSignals()])
+      setLoading(false)
+    }
+    init()
+  }, [])
+
+  // WebSocket实时行情连接
+  useEffect(() => {
+    marketWs.connect()
+    const unsub = marketWs.onMarketData((data) => setLiveQuotes(data))
+    return () => { unsub(); marketWs.disconnect() }
   }, [])
 
   useEffect(() => {
@@ -66,6 +81,13 @@ const Dashboard: React.FC = () => {
       const res: any = await predictionApi.getMyPredictions()
       const items = res?.items || (Array.isArray(res) ? res : [])
       setMyPredictions(Array.isArray(items) ? items : [])
+    } catch {}
+  }
+
+  const fetchSignals = async () => {
+    try {
+      const res: any = await signalsApi.getSignals()
+      setSignals(res?.signals || [])
     } catch {}
   }
 
@@ -168,6 +190,34 @@ const Dashboard: React.FC = () => {
     4: { path: '/train-predict', text: '开始预测' },
   }
 
+  if (loading) {
+    return (
+      <div>
+        <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+          {[1, 2, 3, 4].map((i) => (
+            <Col xs={24} sm={12} lg={6} key={i}>
+              <Card size="small"><Skeleton active paragraph={{ rows: 1 }} /></Card>
+            </Col>
+          ))}
+        </Row>
+        <Card style={{ marginBottom: 20 }} size="small">
+          <Skeleton active paragraph={{ rows: 2 }} />
+        </Card>
+        <Card style={{ marginBottom: 20 }} size="small">
+          <Skeleton active paragraph={{ rows: 4 }} />
+        </Card>
+        <Row gutter={[16, 16]}>
+          <Col xs={24} lg={12}>
+            <Card size="small"><Skeleton active paragraph={{ rows: 3 }} /></Card>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card size="small"><Skeleton active paragraph={{ rows: 3 }} /></Card>
+          </Col>
+        </Row>
+      </div>
+    )
+  }
+
   return (
     <div>
       {/* 标题区 */}
@@ -263,6 +313,55 @@ const Dashboard: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      {/* 实时行情 */}
+      {liveQuotes.length > 0 && (
+        <Card title="📊 实时行情" size="small" style={{ marginTop: 16, marginBottom: 16 }}>
+          <Row gutter={[8, 8]}>
+            {liveQuotes.map((q: any) => (
+              <Col xs={12} sm={8} md={4} key={q.code}>
+                <div style={{ padding: '8px 12px', background: '#fafafa', borderRadius: 8 }}>
+                  <div style={{ fontSize: 12, color: '#999' }}>{q.code}</div>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: q.change_pct > 0 ? '#f5222d' : q.change_pct < 0 ? '#52c41a' : '#333' }}>
+                    {q.close?.toFixed(2)}
+                  </div>
+                  <div style={{ fontSize: 11, color: q.change_pct > 0 ? '#f5222d' : q.change_pct < 0 ? '#52c41a' : '#999' }}>
+                    {q.change_pct > 0 ? '+' : ''}{q.change_pct?.toFixed(2)}%
+                  </div>
+                </div>
+              </Col>
+            ))}
+          </Row>
+        </Card>
+      )}
+
+      {/* 交易信号 */}
+      {signals.length > 0 && (
+        <Card title="🔔 交易信号" size="small" style={{ marginTop: 16, marginBottom: 16 }}>
+          <Row gutter={[8, 8]}>
+            {signals.slice(0, 6).map((s: any, i: number) => (
+              <Col xs={24} sm={12} md={8} key={i}>
+                <div style={{
+                  padding: 12,
+                  background: s.signal_type.includes('buy') ? '#fff1f0' : s.signal_type.includes('sell') ? '#f6ffed' : '#fafafa',
+                  borderRadius: 8,
+                  borderLeft: `3px solid ${s.signal_type.includes('buy') ? '#f5222d' : s.signal_type.includes('sell') ? '#52c41a' : '#faad14'}`,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontWeight: 600 }}>{s.stock_code}</span>
+                    <Tag color={s.signal_type.includes('buy') ? 'red' : s.signal_type.includes('sell') ? 'green' : 'default'}>
+                      {s.signal_type === 'strong_buy' ? '强烈买入' : s.signal_type === 'buy' ? '买入' : s.signal_type === 'strong_sell' ? '强烈卖出' : s.signal_type === 'sell' ? '卖出' : '观望'}
+                    </Tag>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+                    {s.model_name} · 置信度 {Math.round(s.confidence * 100)}%
+                  </div>
+                </div>
+              </Col>
+            ))}
+          </Row>
+        </Card>
+      )}
 
       {/* 我的预测结果 */}
       <Divider orientation="left" style={{ fontSize: 15, color: '#666' }}>

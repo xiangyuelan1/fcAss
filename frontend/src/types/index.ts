@@ -447,3 +447,46 @@ export interface CustomIndicator {
   created_at: string;
   updated_at: string | null;
 }
+
+export interface ModelLeaderboardItem {
+  model_id: number;
+  model_name: string | null;
+  model_type: string | null;
+  user_id: number;
+  username: string;
+  nickname: string;
+  total: number;
+  up_count: number;
+  down_count: number;
+  accuracy: number;
+}
+
+export interface UserLeaderboardItem {
+  user_id: number;
+  username: string;
+  nickname: string;
+  total_predictions: number;
+  total_models: number;
+  score: number;
+}
+
+export interface SubscriptionItem {
+  user_id: number;
+  username: string;
+  nickname: string;
+  latest_prediction: PredictionShareItem | null;
+}
+
+export interface ReplayItem extends PredictionShareItem {
+  actual_close: number | null;
+  actual_change: number | null;
+  actual_direction: string | null;
+  correct: boolean | null;
+}
+
+export interface ReplaySummary {
+  total: number;
+  correct: number;
+  accuracy: number;
+  days: number;
+}

@@ -1,10 +1,11 @@
 import React, { useState } from 'react'
 import { Modal, Steps, Button, Typography, Result } from 'antd'
 import {
-  SmileOutlined,
-  GlobalOutlined,
+  HomeOutlined,
+  RobotOutlined,
   ThunderboltOutlined,
-  TrophyOutlined,
+  GlobalOutlined,
+  StarOutlined,
   ArrowRightOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -23,30 +24,39 @@ interface OnboardingStep {
 
 const ONBOARDING_STEPS: OnboardingStep[] = [
   {
-    icon: <SmileOutlined style={{ fontSize: 48, color: '#1890ff' }} />,
-    title: '欢迎来到A股预测平台',
-    description: '在这里，你可以看别人的预测、参与每日挑战、或者创建自己的AI模型来预测股票涨跌。不需要任何技术基础！',
+    icon: <HomeOutlined style={{ fontSize: 48, color: '#1890ff' }} />,
+    title: '🏠 我的工作台',
+    description: '你的个人工作台，在这里查看预测结果、追踪模型训练进度。牛牛🐂会帮你管理一切！',
+    path: '/',
+    pathText: '进入工作台',
   },
   {
-    icon: <GlobalOutlined style={{ fontSize: 48, color: '#1890ff' }} />,
-    title: '看看大家都在预测什么',
-    description: '社区里有很多高手分享的预测信号和模型，你可以浏览、点赞、甚至一键克隆到自己的名下直接使用。',
+    icon: <RobotOutlined style={{ fontSize: 48, color: '#722ed1' }} />,
+    title: '🤖 创建你的第一个模型',
+    description: '选择算法（MLP/XGBoost/LSTM等）→ 选择训练股票 → 配置特征指标 → 设置预测目标（次日方向/价格/趋势）→ 一键训练！',
+    path: '/models/build',
+    pathText: '试试创建模型',
+  },
+  {
+    icon: <ThunderboltOutlined style={{ fontSize: 48, color: '#52c41a' }} />,
+    title: '📈 训练与预测',
+    description: '训练完成后，选择模型即可自动预测所有训练股票。支持批量预测、回测验证，还可以分享预测到社区！',
+    path: '/train-predict',
+    pathText: '去训练预测',
+  },
+  {
+    icon: <GlobalOutlined style={{ fontSize: 48, color: '#faad14' }} />,
+    title: '🌍 社区',
+    description: '浏览模型广场、查看他人预测、参与每日一猜、发起PK挑战。好模型值得分享！',
     path: '/community',
     pathText: '逛逛社区',
   },
   {
-    icon: <TrophyOutlined style={{ fontSize: 48, color: '#faad14' }} />,
-    title: '参与每日挑战',
-    description: '每天选一只股票，预测它明天涨还是跌。猜对了还能赢积分，上排行榜！完全免费，零门槛参与。',
-    path: '/',
-    pathText: '回到首页参与',
-  },
-  {
-    icon: <ThunderboltOutlined style={{ fontSize: 48, color: '#52c41a' }} />,
-    title: '想自己搞？用模板一键创建',
-    description: '选一个模板，系统自动帮你配好参数和股票，点几下就能拥有自己的AI预测模型。就像搭积木一样简单！',
-    path: '/models/build',
-    pathText: '试试创建模型',
+    icon: <StarOutlined style={{ fontSize: 48, color: '#eb2f96' }} />,
+    title: '⭐ 自选股',
+    description: '创建自选股列表，方便在训练和预测时快速选择。支持按板块分类、批量操作。',
+    path: '/watchlist',
+    pathText: '管理自选股',
   },
 ]
 
@@ -68,6 +78,7 @@ interface OnboardingGuideProps {
 }
 
 const OnboardingGuide: React.FC<OnboardingGuideProps> = ({ open, onClose }) => {
+  const isMobile = window.innerWidth < 768
   const [currentStep, setCurrentStep] = useState(0)
   const navigate = useNavigate()
 
@@ -108,12 +119,12 @@ const OnboardingGuide: React.FC<OnboardingGuideProps> = ({ open, onClose }) => {
       open={open}
       onCancel={handleSkip}
       footer={null}
-      width={560}
+      width={isMobile ? '100%' : 560}
       centered
       closable
       closeIcon={null}
       maskClosable={false}
-      styles={{ body: { padding: '24px 32px' } }}
+      styles={{ body: { padding: isMobile ? '16px 20px' : '24px 32px' } }}
     >
       <Steps
         current={currentStep}
@@ -124,9 +135,9 @@ const OnboardingGuide: React.FC<OnboardingGuideProps> = ({ open, onClose }) => {
 
       {isLastStep && currentStep === ONBOARDING_STEPS.length - 1 ? (
         <Result
-          icon={<SmileOutlined style={{ color: '#52c41a' }} />}
+          icon={<StarOutlined style={{ color: '#52c41a' }} />}
           title="准备好了！"
-          subTitle="你已经了解了平台的基本玩法，现在开始探索吧！"
+          subTitle={'你已经了解了平台的核心功能，现在开始探索吧！牛牛祝你投资顺利！'}
           extra={
             <Button type="primary" size="large" onClick={handleFinish}>
               开始使用

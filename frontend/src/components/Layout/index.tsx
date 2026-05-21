@@ -19,11 +19,14 @@ import {
   CustomerServiceOutlined,
   QuestionCircleOutlined,
   StarOutlined,
+  BookOutlined,
   BellOutlined,
   AndroidOutlined,
+  SunOutlined,
+  MoonOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { useAuthStore } from '@/store'
+import { useAuthStore, useThemeStore } from '@/store'
 import { authApi, messageApi } from '@/services/api'
 import OnboardingGuide from '@/components/OnboardingGuide'
 import MascotBull from '@/components/MascotBull'
@@ -46,6 +49,7 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   const navigate = useNavigate()
   const location = useLocation()
   const { user, logout } = useAuthStore()
+  const { isDark, toggleTheme } = useThemeStore()
 
   const {
     token: { colorBgContainer, borderRadiusLG },
@@ -180,6 +184,11 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: '联系开发团队',
     },
     {
+      key: '/guide',
+      icon: <BookOutlined />,
+      label: '使用说明',
+    },
+    {
       key: '__onboarding__',
       icon: <QuestionCircleOutlined />,
       label: '新手引导',
@@ -264,6 +273,12 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Button
+              type="text"
+              icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggleTheme}
+              style={{ padding: '4px 8px' }}
+            />
             <Badge count={unreadCount} size="small" offset={[2, -2]}>
               <Button
                 type="text"
@@ -392,6 +407,15 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </div>
             <Button
               type="default"
+              icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggleTheme}
+              block
+              style={{ marginBottom: 8 }}
+            >
+              {isDark ? '浅色模式' : '深色模式'}
+            </Button>
+            <Button
+              type="default"
               icon={<AndroidOutlined />}
               onClick={() => setDownloadModalVisible(true)}
               block
@@ -498,6 +522,12 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <Button
+              type="text"
+              icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggleTheme}
+              title={isDark ? '切换浅色模式' : '切换深色模式'}
+            />
             <Button
               type="default"
               icon={<AndroidOutlined />}

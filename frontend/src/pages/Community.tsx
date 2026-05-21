@@ -12,7 +12,12 @@ import {
   Spin,
   Empty,
   Tabs,
+  Modal,
+  Button,
+  Progress,
+  Table,
   message,
+  Skeleton,
 } from 'antd'
 import {
   HeartOutlined,
@@ -23,10 +28,24 @@ import {
   RiseOutlined,
   FallOutlined,
   TeamOutlined,
+  PlayCircleOutlined,
+  BellOutlined,
+  CheckCircleFilled,
+  CloseCircleFilled,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { communityApi, pointsApi, predictionApi, socialApi } from '@/services/api'
-import { CommunityModel, PredictionShareItem, UserPoints, FollowingUpdate } from '@/types'
+import { communityApi, pointsApi, predictionApi, socialApi, leaderboardApi } from '@/services/api'
+import {
+  CommunityModel,
+  PredictionShareItem,
+  UserPoints,
+  FollowingUpdate,
+  ModelLeaderboardItem,
+  UserLeaderboardItem,
+  SubscriptionItem,
+  ReplayItem,
+  ReplaySummary,
+} from '@/types'
 import DailyGuess from '@/components/DailyGuess'
 
 const MODEL_TYPE_COLORS: Record<string, string> = {
@@ -60,8 +79,16 @@ const PREDICTION_SORT_OPTIONS = [
   { label: '最高置信度', value: 'confidence' },
 ]
 
+const LEADERBOARD_PERIOD_OPTIONS = [
+  { label: '近一周', value: 'week' },
+  { label: '近一月', value: 'month' },
+  { label: '全部', value: 'all' },
+]
+
 const Community: React.FC = () => {
   const navigate = useNavigate()
+
+  // 模型广场
   const [models, setModels] = useState<CommunityModel[]>([])
   const [predictions, setPredictions] = useState<PredictionShareItem[]>([])
   const [leaderboard, setLeaderboard] = useState<UserPoints[]>([])
@@ -73,12 +100,31 @@ const Community: React.FC = () => {
   const [sortBy, setSortBy] = useState('newest')
   const [predictionSortBy, setPredictionSortBy] = useState('newest')
   const [activeTab, setActiveTab] = useState('models')
+  const [initialLoading, setInitialLoading] = useState(true)
+
+  // 排行榜
+  const [modelLeaderboard, setModelLeaderboard] = useState<ModelLeaderboardItem[]>([])
+  const [userLeaderboard, setUserLeaderboard] = useState<UserLeaderboardItem[]>([])
+  const [leaderboardPeriod, setLeaderboardPeriod] = useState('week')
+  const [leaderboardType, setLeaderboardType] = useState<'model' | 'user'>('model')
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false)
+
+  // 跟单预测
+  const [subscriptions, setSubscriptions] = useState<SubscriptionItem[]>([])
+
+  // 策略回放
+  const [replayVisible, setReplayVisible] = useState(false)
+  const [replayModelName, setReplayModelName] = useState('')
+  const [replayItems, setReplayItems] = useState<ReplayItem[]>([])
+  const [replaySummary, setReplaySummary] = useState<ReplaySummary | null>(null)
+  const [replayLoading, setReplayLoading] = useState(false)
 
   useEffect(() => {
-    fetchModels()
-    fetchPredictions()
-    fetchLeaderboard()
-    fetchFollowingUpdates()
+    const init = async () => {
+      await Promise.all([fetchModels(), fetchPredictions(), fetchLeaderboard(), fetchFollowingUpdates(), fetchSubscriptions()])
+      setInitialLoading(false)
+    }
+    init()
   }, [])
 
   const fetchModels = useCallback(async () => {
@@ -132,6 +178,39 @@ const Community: React.FC = () => {
     }
   }
 
+  const fetchSubscriptions = async () => {
+    try {
+      const data = await predictionApi.getSubscriptions()
+      setSubscriptions((data as any)?.subscriptions || [])
+    } catch {
+      setSubscriptions([])
+    }
+  }
+
+  const fetchModelLeaderboard = async (period: string) => {
+    setLeaderboardLoading(true)
+    try {
+      const data = await leaderboardApi.getModelLeaderboard({ period, limit: 20 })
+      setModelLeaderboard((data as any)?.leaderboard || [])
+    } catch {
+      message.error('获取模型排行榜失败')
+    } finally {
+      setLeaderboardLoading(false)
+    }
+  }
+
+  const fetchUserLeaderboard = async (period: string) => {
+    setLeaderboardLoading(true)
+    try {
+      const data = await leaderboardApi.getUserLeaderboard({ period, limit: 20 })
+      setUserLeaderboard((data as any)?.leaderboard || [])
+    } catch {
+      message.error('获取用户排行榜失败')
+    } finally {
+      setLeaderboardLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (activeTab === 'models') {
       fetchModels()
@@ -143,6 +222,16 @@ const Community: React.FC = () => {
       fetchPredictions()
     }
   }, [predictionSortBy, activeTab, fetchPredictions])
+
+  useEffect(() => {
+    if (activeTab === 'leaderboard') {
+      if (leaderboardType === 'model') {
+        fetchModelLeaderboard(leaderboardPeriod)
+      } else {
+        fetchUserLeaderboard(leaderboardPeriod)
+      }
+    }
+  }, [activeTab, leaderboardPeriod, leaderboardType])
 
   const handleLikeModel = async (id: number) => {
     try {
@@ -169,6 +258,34 @@ const Community: React.FC = () => {
       fetchPredictions()
     } catch {
       message.error('操作失败')
+    }
+  }
+
+  const handleSubscribe = async (targetUserId: number) => {
+    try {
+      const data = await predictionApi.subscribeUser(targetUserId)
+      const subscribed = (data as any)?.subscribed
+      message.success(subscribed ? '订阅成功' : '已取消订阅')
+      fetchSubscriptions()
+    } catch {
+      message.error('操作失败')
+    }
+  }
+
+  const handleReplay = async (modelId: number, modelName: string) => {
+    setReplayModelName(modelName)
+    setReplayVisible(true)
+    setReplayLoading(true)
+    setReplayItems([])
+    setReplaySummary(null)
+    try {
+      const data = await predictionApi.getStrategyReplay(modelId, 30)
+      setReplayItems((data as any)?.replay || [])
+      setReplaySummary((data as any)?.summary || null)
+    } catch {
+      message.error('获取策略回放失败')
+    } finally {
+      setReplayLoading(false)
     }
   }
 
@@ -272,6 +389,16 @@ const Community: React.FC = () => {
                       >
                         <CopyOutlined /> {model.clones_count}
                       </span>
+                      <span
+                        style={{ cursor: 'pointer', color: '#1890ff' }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleReplay(model.source_model_id, model.name)
+                        }}
+                        title="策略回放"
+                      >
+                        <PlayCircleOutlined /> 回放
+                      </span>
                     </Space>
                   </Col>
                 </Row>
@@ -358,12 +485,23 @@ const Community: React.FC = () => {
                     </Space>
                   </Col>
                   <Col>
-                    <span
-                      style={{ cursor: 'pointer', color: item.is_liked ? '#eb2f96' : '#999' }}
-                      onClick={() => handleLikePrediction(item.id)}
-                    >
-                      <HeartOutlined /> {item.likes_count}
-                    </span>
+                    <Space size={12}>
+                      <span
+                        style={{ cursor: 'pointer', color: item.is_liked ? '#eb2f96' : '#999' }}
+                        onClick={() => handleLikePrediction(item.id)}
+                      >
+                        <HeartOutlined /> {item.likes_count}
+                      </span>
+                      {item.user_id && (
+                        <span
+                          style={{ cursor: 'pointer', color: '#1890ff' }}
+                          onClick={() => handleSubscribe(item.user_id)}
+                          title="跟单订阅"
+                        >
+                          <BellOutlined /> 跟单
+                        </span>
+                      )}
+                    </Space>
                   </Col>
                 </Row>
               </Card>
@@ -374,9 +512,310 @@ const Community: React.FC = () => {
     </Spin>
   )
 
+  const renderLeaderboard = () => (
+    <div>
+      <Row gutter={[16, 12]} style={{ marginBottom: 16 }}>
+        <Col xs={12} sm={8}>
+          <Select
+            style={{ width: '100%' }}
+            options={[
+              { label: '模型排行', value: 'model' },
+              { label: '用户排行', value: 'user' },
+            ]}
+            value={leaderboardType}
+            onChange={(val) => setLeaderboardType(val)}
+          />
+        </Col>
+        <Col xs={12} sm={8}>
+          <Select
+            style={{ width: '100%' }}
+            options={LEADERBOARD_PERIOD_OPTIONS}
+            value={leaderboardPeriod}
+            onChange={(val) => setLeaderboardPeriod(val)}
+          />
+        </Col>
+      </Row>
+
+      <Spin spinning={leaderboardLoading}>
+        {leaderboardType === 'model' ? (
+          modelLeaderboard.length === 0 && !leaderboardLoading ? (
+            <Empty description="暂无模型排行数据" />
+          ) : (
+            <List
+              dataSource={modelLeaderboard}
+              renderItem={(item, index) => (
+                <List.Item style={{ padding: '12px 0' }}>
+                  <List.Item.Meta
+                    avatar={
+                      <Avatar
+                        size="small"
+                        style={{
+                          backgroundColor:
+                            index === 0 ? '#f5222d' : index === 1 ? '#faad14' : index === 2 ? '#fa8c16' : '#1890ff',
+                        }}
+                      >
+                        {index + 1}
+                      </Avatar>
+                    }
+                    title={
+                      <Space>
+                        <span style={{ fontSize: 14 }}>{item.model_name || `模型#${item.model_id}`}</span>
+                        {item.model_type && (
+                          <Tag color={MODEL_TYPE_COLORS[item.model_type] || 'default'} style={{ fontSize: 11 }}>
+                            {item.model_type.toUpperCase()}
+                          </Tag>
+                        )}
+                      </Space>
+                    }
+                    description={
+                      <Space size={8}>
+                        <span style={{ fontSize: 12, color: '#999' }}>作者: {item.nickname}</span>
+                        <span style={{ fontSize: 12, color: '#999' }}>预测 {item.total} 次</span>
+                      </Space>
+                    }
+                  />
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontWeight: 700, fontSize: 18, color: '#1890ff' }}>
+                      {(item.accuracy * 100).toFixed(1)}%
+                    </div>
+                    <div style={{ fontSize: 11, color: '#999' }}>准确率</div>
+                  </div>
+                </List.Item>
+              )}
+            />
+          )
+        ) : (
+          userLeaderboard.length === 0 && !leaderboardLoading ? (
+            <Empty description="暂无用户排行数据" />
+          ) : (
+            <List
+              dataSource={userLeaderboard}
+              renderItem={(item, index) => (
+                <List.Item style={{ padding: '12px 0' }}>
+                  <List.Item.Meta
+                    avatar={
+                      <Avatar
+                        size="small"
+                        style={{
+                          backgroundColor:
+                            index === 0 ? '#f5222d' : index === 1 ? '#faad14' : index === 2 ? '#fa8c16' : '#1890ff',
+                        }}
+                      >
+                        {index + 1}
+                      </Avatar>
+                    }
+                    title={<span style={{ fontSize: 14 }}>{item.nickname}</span>}
+                    description={
+                      <Space size={8}>
+                        <span style={{ fontSize: 12, color: '#999' }}>预测 {item.total_predictions} 次</span>
+                        <span style={{ fontSize: 12, color: '#999' }}>模型 {item.total_models} 个</span>
+                      </Space>
+                    }
+                  />
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontWeight: 700, fontSize: 18, color: '#faad14' }}>
+                      {item.score}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#999' }}>综合评分</div>
+                  </div>
+                </List.Item>
+              )}
+            />
+          )
+        )}
+      </Spin>
+    </div>
+  )
+
+  const renderReplayModal = () => {
+    const columns = [
+      {
+        title: '日期',
+        dataIndex: 'created_at',
+        key: 'created_at',
+        width: 100,
+        render: (v: string) => v ? new Date(v).toLocaleDateString() : '-',
+      },
+      {
+        title: '股票',
+        key: 'stock',
+        width: 120,
+        render: (_: any, record: ReplayItem) => (
+          <Space size={4}>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>{record.stock_name || record.stock_code}</span>
+            <Tag style={{ fontSize: 10, lineHeight: '14px', padding: '0 3px' }}>{record.stock_code}</Tag>
+          </Space>
+        ),
+      },
+      {
+        title: '预测方向',
+        dataIndex: 'direction',
+        key: 'direction',
+        width: 90,
+        render: (v: string | null) => v ? (
+          <Tag color={getDirectionColor(v)} icon={getDirectionIcon(v)}>
+            {getDirectionLabel(v)}
+          </Tag>
+        ) : '-',
+      },
+      {
+        title: '实际方向',
+        dataIndex: 'actual_direction',
+        key: 'actual_direction',
+        width: 90,
+        render: (v: string | null) => v ? (
+          <Tag color={getDirectionColor(v)} icon={getDirectionIcon(v)}>
+            {getDirectionLabel(v)}
+          </Tag>
+        ) : '-',
+      },
+      {
+        title: '实际涨跌',
+        dataIndex: 'actual_change',
+        key: 'actual_change',
+        width: 90,
+        render: (v: number | null) => v != null ? (
+          <span style={{ color: v > 0 ? '#f5222d' : v < 0 ? '#52c41a' : '#999', fontWeight: 600 }}>
+            {v > 0 ? '+' : ''}{v}%
+          </span>
+        ) : '-',
+      },
+      {
+        title: '结果',
+        dataIndex: 'correct',
+        key: 'correct',
+        width: 60,
+        render: (v: boolean | null) => {
+          if (v === true) return <CheckCircleFilled style={{ color: '#52c41a', fontSize: 18 }} />
+          if (v === false) return <CloseCircleFilled style={{ color: '#f5222d', fontSize: 18 }} />
+          return <span style={{ color: '#999' }}>-</span>
+        },
+      },
+    ]
+
+    return (
+      <Modal
+        title={
+          <Space>
+            <PlayCircleOutlined style={{ color: '#1890ff' }} />
+            <span>策略回放 - {replayModelName}</span>
+          </Space>
+        }
+        open={replayVisible}
+        onCancel={() => setReplayVisible(false)}
+        width={800}
+        footer={null}
+      >
+        {replaySummary && (
+          <Card size="small" style={{ marginBottom: 16, background: '#fafafa' }}>
+            <Row gutter={24} align="middle">
+              <Col span={8}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>准确率</div>
+                  <Progress
+                    type="circle"
+                    percent={Math.round(replaySummary.accuracy * 100)}
+                    size={64}
+                    strokeColor={replaySummary.accuracy >= 0.6 ? '#52c41a' : replaySummary.accuracy >= 0.4 ? '#faad14' : '#f5222d'}
+                  />
+                </div>
+              </Col>
+              <Col span={16}>
+                <Row gutter={16}>
+                  <Col span={8}>
+                    <div style={{ fontSize: 12, color: '#999' }}>总预测</div>
+                    <div style={{ fontWeight: 700, fontSize: 20 }}>{replaySummary.total}</div>
+                  </Col>
+                  <Col span={8}>
+                    <div style={{ fontSize: 12, color: '#999' }}>正确</div>
+                    <div style={{ fontWeight: 700, fontSize: 20, color: '#52c41a' }}>{replaySummary.correct}</div>
+                  </Col>
+                  <Col span={8}>
+                    <div style={{ fontSize: 12, color: '#999' }}>回放天数</div>
+                    <div style={{ fontWeight: 700, fontSize: 20 }}>{replaySummary.days}</div>
+                  </Col>
+                </Row>
+              </Col>
+            </Row>
+          </Card>
+        )}
+
+        <Table
+          columns={columns}
+          dataSource={replayItems}
+          rowKey="id"
+          loading={replayLoading}
+          size="small"
+          pagination={{ pageSize: 10, size: 'small' }}
+          scroll={{ x: 550 }}
+          locale={{ emptyText: '暂无回放数据' }}
+        />
+      </Modal>
+    )
+  }
+
   const renderSidebar = () => (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <DailyGuess compact />
+
+      {/* 跟单预测 - 我订阅的用户 */}
+      <Card
+        title={
+          <Space>
+            <BellOutlined style={{ color: '#1890ff' }} />
+            <span>跟单预测</span>
+          </Space>
+        }
+        size="small"
+      >
+        {subscriptions.length === 0 ? (
+          <Empty description="暂未订阅任何用户" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <List
+            size="small"
+            dataSource={subscriptions}
+            renderItem={(sub) => (
+              <List.Item style={{ padding: '8px 0' }}>
+                <List.Item.Meta
+                  avatar={
+                    <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
+                      {sub.nickname?.[0] || sub.username?.[0] || '?'}
+                    </Avatar>
+                  }
+                  title={
+                    <span style={{ fontSize: 13 }}>{sub.nickname || sub.username}</span>
+                  }
+                  description={
+                    sub.latest_prediction ? (
+                      <Space size={4}>
+                        <Tag
+                          color={getDirectionColor(sub.latest_prediction.direction ?? 'flat')}
+                          style={{ fontSize: 10, lineHeight: '14px', padding: '0 3px' }}
+                        >
+                          {getDirectionLabel(sub.latest_prediction.direction ?? 'flat')}
+                        </Tag>
+                        <span style={{ fontSize: 11, color: '#999' }}>
+                          {sub.latest_prediction.stock_name || sub.latest_prediction.stock_code}
+                        </span>
+                      </Space>
+                    ) : (
+                      <span style={{ fontSize: 12, color: '#bbb' }}>暂无预测</span>
+                    )
+                  }
+                />
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  onClick={() => handleSubscribe(sub.user_id)}
+                >
+                  取消
+                </Button>
+              </List.Item>
+            )}
+          />
+        )}
+      </Card>
 
       <Card
         title={
@@ -523,7 +962,44 @@ const Community: React.FC = () => {
         </div>
       ),
     },
+    {
+      key: 'leaderboard',
+      label: (
+        <Space size={4}>
+          <TrophyOutlined />
+          <span>排行榜</span>
+        </Space>
+      ),
+      children: renderLeaderboard(),
+    },
   ]
+
+  if (initialLoading) {
+    return (
+      <div>
+        <Row gutter={[24, 24]}>
+          <Col xs={24} lg={17}>
+            <Card>
+              <Skeleton active paragraph={{ rows: 2 }} style={{ marginBottom: 16 }} />
+              <Row gutter={[16, 16]}>
+                {[1, 2].map((i) => (
+                  <Col xs={24} sm={12} key={i}>
+                    <Card><Skeleton active paragraph={{ rows: 3 }} /></Card>
+                  </Col>
+                ))}
+              </Row>
+            </Card>
+          </Col>
+          <Col xs={24} lg={7}>
+            <Space direction="vertical" size={16} style={{ width: '100%' }}>
+              <Card size="small"><Skeleton active paragraph={{ rows: 2 }} /></Card>
+              <Card size="small"><Skeleton active paragraph={{ rows: 4 }} /></Card>
+            </Space>
+          </Col>
+        </Row>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -547,6 +1023,8 @@ const Community: React.FC = () => {
           {renderSidebar()}
         </Col>
       </Row>
+
+      {renderReplayModal()}
     </div>
   )
 }

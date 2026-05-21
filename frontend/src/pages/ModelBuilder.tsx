@@ -49,7 +49,7 @@ import {
   FolderOutlined,
   FieldTimeOutlined,
 } from '@ant-design/icons'
-import { modelApi, dataApi, featureApi, watchlistApi } from '@/services/api'
+import { modelApi, dataApi, featureApi, watchlistApi, recommendationApi } from '@/services/api'
 import { ModelType, Indicator, Stock, ModelTemplate } from '@/types'
 import MascotBull from '@/components/MascotBull'
 import dayjs from 'dayjs'
@@ -261,6 +261,7 @@ const serializeDraft = (state: {
 })
 
 const ModelBuilder: React.FC = () => {
+  const isMobile = window.innerWidth < 768
   const { id } = useParams()
   const navigate = useNavigate()
   const [currentStep, setCurrentStep] = useState(0)
@@ -273,6 +274,7 @@ const ModelBuilder: React.FC = () => {
   const [templates, setTemplates] = useState<ModelTemplate[]>([])
   const [templatesLoading, setTemplatesLoading] = useState(false)
   const [showTemplatePanel, setShowTemplatePanel] = useState(true)
+  const [modelRecommendations, setModelRecommendations] = useState<any[]>([])
 
   // 表单数据全部用state管理，不依赖ant Form的validateFields
   const [name, setName] = useState('')
@@ -309,6 +311,7 @@ const ModelBuilder: React.FC = () => {
     fetchIndicators()
     fetchStocks()
     fetchWatchlists()
+    fetchModelRecommendations()
     if (id) {
       fetchModelDetail()
       setShowTemplatePanel(false)
@@ -385,6 +388,12 @@ const ModelBuilder: React.FC = () => {
   }
   const fetchWatchlists = async () => {
     try { const data: any = await watchlistApi.getWatchlists(); setWatchlists(data) } catch {}
+  }
+  const fetchModelRecommendations = async () => {
+    try {
+      const data: any = await recommendationApi.getModelRecommendations({ limit: 3 })
+      setModelRecommendations(data.recommendations || [])
+    } catch {}
   }
   const handleWatchlistSelect = async (watchlistId: number) => {
     setActiveWatchlistId(watchlistId)
@@ -688,7 +697,7 @@ const ModelBuilder: React.FC = () => {
                 const stats = typeStats.find((s: any) => s.model_type === key)
                 const isHot = HOT_MODEL_TYPES.includes(key)
                 return (
-                  <Col span={8} key={key}>
+                  <Col xs={24} sm={12} md={8} key={key}>
                     <Card
                       hoverable
                       size="small"
@@ -727,6 +736,16 @@ const ModelBuilder: React.FC = () => {
               })}
             </Row>
           </div>
+
+          {modelRecommendations.length > 0 && (
+            <Alert
+              message="💡 智能推荐"
+              description={`与你偏好相似的用户常用：${modelRecommendations.map((r: any) => `${r.model_type}(${r.target})`).join('、')}`}
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+            />
+          )}
 
           {selectedModelType && currentModelInfo && (
             <Card
@@ -932,7 +951,7 @@ const ModelBuilder: React.FC = () => {
                       children: (
                         <Row gutter={[16, 8]}>
                           {(indicator as any).params.map((param: any) => (
-                            <Col span={8} key={param.name}>
+                            <Col xs={24} sm={12} md={8} key={param.name}>
                               <div style={{ marginBottom: 4, fontSize: 12 }}>{param.name} ({param.min}~{param.max})</div>
                               <InputNumber
                                 value={indicatorParams[key]?.[param.name] ?? param.default}
@@ -1273,6 +1292,7 @@ const ModelBuilder: React.FC = () => {
         title="发现未完成的草稿"
         closable={false}
         maskClosable={false}
+        width={isMobile ? '100%' : 500}
         footer={[
           <Button key="discard" onClick={handleDiscardDraft}>清空重新开始</Button>,
           <Button key="restore" type="primary" onClick={handleRestoreDraft}>继续编辑</Button>,
@@ -1426,10 +1446,10 @@ const ModelConfigForm: React.FC<{
       {schema.type === 'int' || schema.type === 'float' ? (
         isCore ? (
           <Row gutter={16} align="middle">
-            <Col span={18}>
+            <Col xs={24} sm={18}>
               <Slider min={schema.min} max={schema.max} step={schema.step} value={value[key] ?? schema.default ?? 0} onChange={(val) => onChange({ ...value, [key]: val })} />
             </Col>
-            <Col span={6}>
+            <Col xs={24} sm={6}>
               <InputNumber min={schema.min} max={schema.max} step={schema.step} value={value[key] ?? schema.default ?? 0} onChange={(val) => onChange({ ...value, [key]: val })} style={{ width: '100%' }} />
             </Col>
           </Row>
@@ -1474,7 +1494,7 @@ const ModelConfigForm: React.FC<{
             children: (
               <Row gutter={[16, 8]}>
                 {advancedEntries.map(([key, schema]: [string, any]) => (
-                  <Col span={12} key={key}>
+                  <Col xs={24} sm={12} key={key}>
                     {renderParam(key, schema, false)}
                   </Col>
                 ))}
@@ -1526,11 +1546,11 @@ const MLPLayerEditor: React.FC<{ value: Record<string, any>; onChange: (c: Recor
         </div>
         {hiddenLayers.map((size, idx) => (
           <Row key={idx} gutter={16} align="middle" style={{ marginBottom: 8 }}>
-            <Col span={4} style={{ textAlign: 'right', fontWeight: 500, fontSize: 13 }}>层 {idx + 1}</Col>
-            <Col span={14}>
+            <Col xs={6} sm={4} style={{ textAlign: 'right', fontWeight: 500, fontSize: 13 }}>层 {idx + 1}</Col>
+            <Col xs={12} sm={14}>
               <Slider min={16} max={512} step={16} value={size} onChange={(val) => { const n = [...hiddenLayers]; n[idx] = val; updateLayers(n) }} marks={{ 16: '16', 64: '64', 128: '128', 256: '256', 512: '512' }} />
             </Col>
-            <Col span={4}>
+            <Col xs={6} sm={4}>
               <InputNumber min={16} max={512} step={16} value={size} onChange={(val) => { if (val) { const n = [...hiddenLayers]; n[idx] = val; updateLayers(n) } }} style={{ width: '100%' }} size="small" />
             </Col>
           </Row>
@@ -1558,15 +1578,15 @@ const MLPLayerEditor: React.FC<{ value: Record<string, any>; onChange: (c: Recor
           label: '高级参数',
           children: (
             <Row gutter={[16, 12]}>
-              <Col span={8}>
+              <Col xs={24} sm={12} md={8}>
                 <div style={{ fontSize: 12, marginBottom: 4 }}>dropout <Tooltip title="防止过拟合"><InfoCircleOutlined style={{ color: '#1890ff' }} /></Tooltip></div>
                 <Slider min={0} max={0.5} step={0.1} value={value.dropout ?? 0.2} onChange={(val) => onChange({ ...value, dropout: val })} />
               </Col>
-              <Col span={8}>
+              <Col xs={24} sm={12} md={8}>
                 <div style={{ fontSize: 12, marginBottom: 4 }}>epochs <Tooltip title="训练轮数"><InfoCircleOutlined style={{ color: '#1890ff' }} /></Tooltip></div>
                 <InputNumber min={10} max={500} step={10} value={value.epochs ?? 50} onChange={(val) => val && onChange({ ...value, epochs: val })} style={{ width: '100%' }} size="small" />
               </Col>
-              <Col span={8}>
+              <Col xs={24} sm={12} md={8}>
                 <div style={{ fontSize: 12, marginBottom: 4 }}>batch_size <Tooltip title="每批训练样本数"><InfoCircleOutlined style={{ color: '#1890ff' }} /></Tooltip></div>
                 <InputNumber min={8} max={128} step={8} value={value.batch_size ?? 32} onChange={(val) => val && onChange({ ...value, batch_size: val })} style={{ width: '100%' }} size="small" />
               </Col>
@@ -1585,6 +1605,7 @@ const WatchlistManageModal: React.FC<{
   visible: boolean
   onClose: () => void
 }> = ({ visible, onClose }) => {
+  const isMobile = window.innerWidth < 768
   const [watchlists, setWatchlists] = useState<any[]>([])
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editName, setEditName] = useState('')
@@ -1681,7 +1702,7 @@ const WatchlistManageModal: React.FC<{
       open={visible}
       onCancel={onClose}
       footer={null}
-      width={700}
+      width={isMobile ? '100%' : 700}
       destroyOnClose
     >
       {/* 创建新自选表 */}

@@ -73,6 +73,68 @@ class ModelCheckpoint:
     """模型检查点管理"""
     
     @staticmethod
+    def update_checkpoint_metadata(task_id: int, feature_cols: list = None, feature_importance: dict = None):
+        """向已有检查点文件追加元数据（feature_cols / feature_importance），不触碰模型权重
+        
+        训练完成后调用，将特征列名和特征重要性写入检查点，
+        以便预测和解释性 API 读取，无需重新保存模型对象。
+        """
+        checkpoint_path = os.path.join(settings.MODEL_DIR, f'task_{task_id}_checkpoint.pt')
+        if not os.path.exists(checkpoint_path):
+            return
+        
+        with open(checkpoint_path, 'rb') as f:
+            magic = f.read(4)
+        is_pytorch = magic[:2] == b'PK'
+        
+        if is_pytorch:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+            if feature_cols is not None:
+                checkpoint['feature_cols'] = feature_cols
+            if feature_importance is not None:
+                checkpoint['feature_importance'] = feature_importance
+            torch.save(checkpoint, checkpoint_path)
+        else:
+            with open(checkpoint_path, 'rb') as f:
+                checkpoint = pickle.load(f)
+            if feature_cols is not None:
+                checkpoint['feature_cols'] = feature_cols
+            if feature_importance is not None:
+                checkpoint['feature_importance'] = feature_importance
+            with open(checkpoint_path, 'wb') as f:
+                pickle.dump(checkpoint, f)
+    
+    @staticmethod
+    def load_checkpoint_metadata(task_id: int) -> Dict[str, Any]:
+        """仅加载检查点元数据（不加载模型对象），用于特征重要性查询等轻量场景
+        
+        Returns:
+            包含 feature_cols, feature_importance, model_type, metrics 等字段的字典
+        """
+        checkpoint_path = os.path.join(settings.MODEL_DIR, f'task_{task_id}_checkpoint.pt')
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"模型检查点不存在: {checkpoint_path}")
+        
+        with open(checkpoint_path, 'rb') as f:
+            magic = f.read(4)
+        is_pytorch = magic[:2] == b'PK'
+        
+        if is_pytorch:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        else:
+            with open(checkpoint_path, 'rb') as f:
+                checkpoint = pickle.load(f)
+        
+        return {
+            'feature_cols': checkpoint.get('feature_cols', []),
+            'feature_importance': checkpoint.get('feature_importance', {}),
+            'model_type': checkpoint.get('model_type', ''),
+            'feature_window': checkpoint.get('feature_window', 1),
+            'input_size': checkpoint.get('input_size', 0),
+            'metrics': checkpoint.get('metrics', {}),
+        }
+    
+    @staticmethod
     def save_checkpoint(model, task_id: int, metrics: Dict[str, Any], model_config: Dict[str, Any], model_type: str, input_size: int = 0, feature_window: int = 1):
         """保存模型检查点，包含完整的模型结构和配置
         
@@ -385,6 +447,23 @@ class TrainingService:
             user_model.status = 'trained'
             self.db.commit()
             
+            # 训练完成后计算特征重要性并写入检查点
+            try:
+                trained_model, _, _, _ = ModelCheckpoint.load_checkpoint(task_id)
+                feature_importance = self._compute_feature_importance(
+                    trained_model, model_type, self._feature_cols,
+                    X_train, y_train
+                )
+                if feature_importance:
+                    ModelCheckpoint.update_checkpoint_metadata(
+                        task_id,
+                        feature_cols=self._feature_cols,
+                        feature_importance=feature_importance,
+                    )
+                    self._log(task_id, f"特征重要性已计算，共 {len(feature_importance)} 个特征")
+            except Exception as e:
+                self._log(task_id, f"特征重要性计算跳过: {str(e)}")
+            
             training_progress[task_id] = {
                 'stage': 'completed',
                 'progress': 100,
@@ -412,6 +491,8 @@ class TrainingService:
         - sklearn/MLP + feature_window>1: 将近N日特征展平为单一向量
         - sklearn/MLP + feature_window=1: 单日截面模式（向后兼容）
         """
+        self._feature_cols = []
+        
         model_type = user_model.model_type
         feature_window = getattr(user_model, 'feature_window', None) or 1
         
@@ -470,6 +551,9 @@ class TrainingService:
                 exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
                                 'change_pct', 'change_amount', 'adj_close'}
                 feature_cols = [col for col in df.columns if col not in exclude_cols]
+                
+                if not self._feature_cols and feature_cols:
+                    self._feature_cols = feature_cols
                 
                 if not feature_cols:
                     skip_reasons.append(f"{code}: 无可用特征列")
@@ -595,6 +679,77 @@ class TrainingService:
             result[i] = X[i:i+window_size].flatten()
         
         return result
+    
+    def _compute_feature_importance(self, model, model_type: str, feature_cols: list,
+                                     X_train: np.ndarray = None, y_train: np.ndarray = None) -> dict:
+        """计算特征重要性，返回 {特征名: 归一化重要性} 字典
+        
+        策略因模型类型而异：
+        - 树模型（xgboost / lightgbm / randomforest）：直接读取 feature_importances_
+        - MLP：基于排列重要性（permutation importance），衡量打乱某特征后预测偏差程度
+        - LSTM / GRU：序列模型特征重要性难以可靠估计，跳过
+        """
+        importance = {}
+        if not feature_cols:
+            return importance
+        
+        try:
+            if model_type in ('xgboost', 'lightgbm', 'randomforest'):
+                if hasattr(model, 'feature_importances_'):
+                    imp = model.feature_importances_
+                elif hasattr(model, 'get_booster'):
+                    raw = model.get_booster().get_score(importance_type='gain')
+                    imp = np.array([raw.get(f'f{i}', 0) for i in range(len(feature_cols))])
+                else:
+                    return importance
+                
+                if isinstance(imp, np.ndarray):
+                    total = imp.sum()
+                    if total > 0:
+                        imp = imp / total
+                    for i, col in enumerate(feature_cols):
+                        if i < len(imp):
+                            importance[col] = round(float(imp[i]), 4)
+            
+            elif model_type == 'mlp' and X_train is not None and y_train is not None:
+                if not TORCH_AVAILABLE:
+                    return importance
+                if not hasattr(model, 'parameters'):
+                    return importance
+                
+                # 限制采样量，避免排列重要性计算耗时过长
+                sample_size = min(500, len(X_train))
+                indices = np.random.choice(len(X_train), sample_size, replace=False)
+                X_sample = X_train[indices]
+                y_sample = y_train[indices]
+                
+                X_t = torch.FloatTensor(X_sample)
+                with torch.no_grad():
+                    pred_orig = model(X_t).numpy().flatten()
+                baseline_error = np.mean((pred_orig - y_sample) ** 2)
+                
+                if baseline_error < 1e-12:
+                    return importance
+                
+                perm_imp = np.zeros(len(feature_cols))
+                for j in range(len(feature_cols)):
+                    X_perm = X_sample.copy()
+                    np.random.shuffle(X_perm[:, j])
+                    X_t_perm = torch.FloatTensor(X_perm)
+                    with torch.no_grad():
+                        pred_perm = model(X_t_perm).numpy().flatten()
+                    perm_error = np.mean((pred_perm - y_sample) ** 2)
+                    perm_imp[j] = max(perm_error - baseline_error, 0)
+                
+                total = perm_imp.sum()
+                if total > 0:
+                    perm_imp = perm_imp / total
+                    for i, col in enumerate(feature_cols):
+                        importance[col] = round(float(perm_imp[i]), 4)
+        except Exception:
+            pass
+        
+        return importance
     
     def _train_pytorch_model(
         self, task_id, model_type, config,

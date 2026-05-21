@@ -1,7 +1,8 @@
 """
 FastAPI应用主入口
 """
-from fastapi import FastAPI
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
@@ -21,6 +22,66 @@ from app.models.watchlist import Watchlist, WatchlistItem
 from app.models.daily_guess import DailyGuessStock, DailyGuessVote
 from app.api import api_router
 from app.auth import get_password_hash
+
+
+class ConnectionManager:
+    """WebSocket连接管理器，维护活跃连接并负责广播消息"""
+
+    def __init__(self):
+        self.active: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active.append(ws)
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.active:
+            self.active.remove(ws)
+
+    async def broadcast(self, data: dict):
+        disconnected = []
+        for ws in self.active:
+            try:
+                await ws.send_json(data)
+            except Exception:
+                disconnected.append(ws)
+        for ws in disconnected:
+            self.disconnect(ws)
+
+
+ws_manager = ConnectionManager()
+
+
+async def market_data_pusher():
+    """后台任务：每30秒推送热门股票最新行情到所有WebSocket客户端"""
+    while True:
+        try:
+            db = SessionLocal()
+            try:
+                from app.services.data_service import DataService
+                ds = DataService(db)
+                hot_stocks = ['600519', '000858', '601318', '000001', '600036']
+                quotes = []
+                for code in hot_stocks:
+                    try:
+                        prices = ds.get_stock_prices(code, limit=1)
+                        if prices:
+                            p = prices[-1]
+                            quotes.append({
+                                'code': code,
+                                'close': float(p.close) if p.close else 0,
+                                'change_pct': float(p.change_pct) if p.change_pct else 0,
+                                'volume': int(p.volume) if p.volume else 0,
+                            })
+                    except Exception:
+                        continue
+                if quotes:
+                    await ws_manager.broadcast({'type': 'market', 'data': quotes})
+            finally:
+                db.close()
+        except Exception:
+            pass
+        await asyncio.sleep(30)
 
 
 def _ensure_default_admin():
@@ -84,6 +145,9 @@ async def lifespan(app: FastAPI):
     _ensure_default_admin()
     _sync_stock_pool_on_startup()
 
+    # 启动行情推送后台任务
+    asyncio.create_task(market_data_pusher())
+
     yield
 
     print("[关闭] 应用关闭")
@@ -119,6 +183,17 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+@app.websocket("/ws/market")
+async def websocket_market(ws: WebSocket):
+    """WebSocket端点：客户端连接后接收实时行情推送"""
+    await ws_manager.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect(ws)
 
 
 @app.get("/")

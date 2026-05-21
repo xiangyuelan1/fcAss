@@ -2,7 +2,7 @@
 API路由模块
 """
 from fastapi import APIRouter
-from app.api import auth, data, features, models, training, backtest, payment, prediction, admin, community, pk, points, messages, guide, watchlist, daily_guess, social
+from app.api import auth, data, features, models, training, backtest, payment, prediction, admin, community, pk, points, messages, guide, watchlist, daily_guess, social, ensemble, recommendations, paper_trading
 
 api_router = APIRouter(prefix="/api")
 
@@ -23,3 +23,8 @@ api_router.include_router(guide.router, prefix="/guide", tags=["用户引导"])
 api_router.include_router(watchlist.router, prefix="/watchlists", tags=["自选股"])
 api_router.include_router(daily_guess.router, prefix="/daily-guess", tags=["每日一猜"])
 api_router.include_router(social.router, prefix="/social", tags=["社交"])
+api_router.include_router(ensemble.router, prefix="/ensemble", tags=["模型组合"])
+api_router.include_router(signals.router, prefix="/signals", tags=["交易信号"])
+api_router.include_router(leaderboard.router, tags=["排行榜"])
+api_router.include_router(recommendations.router, tags=["智能推荐"])
+api_router.include_router(paper_trading.router, tags=["模拟盘"])

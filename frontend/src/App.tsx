@@ -1,6 +1,6 @@
 import React, { useEffect, Suspense } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import { Spin } from 'antd'
+import { Spin, ConfigProvider, theme as antTheme } from 'antd'
 import AppLayout from './components/Layout'
 import PWAInstallPrompt from './components/PWAInstallPrompt'
 import PWAUpdatePrompt from './components/PWAUpdatePrompt'
@@ -14,7 +14,8 @@ import AdminUsers from './pages/AdminUsers'
 import AdminConfig from './pages/AdminConfig'
 import LoginPage from './pages/Login'
 import WatchlistPage from './pages/Watchlist'
-import { useAuthStore } from './store'
+import UserGuide from './pages/UserGuide'
+import { useAuthStore, useThemeStore } from './store'
 
 const Community = React.lazy(() => import('@/pages/Community'))
 const PKArena = React.lazy(() => import('@/pages/PKArena'))
@@ -41,7 +42,26 @@ const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
 const App: React.FC = () => {
   const { isAuthenticated, checkAuth } = useAuthStore()
+  const { isDark } = useThemeStore()
   const [initializing, setInitializing] = React.useState(true)
+
+  // 深色模式：同步 body class
+  useEffect(() => {
+    if (isDark) {
+      document.body.classList.add('dark-mode')
+    } else {
+      document.body.classList.remove('dark-mode')
+    }
+  }, [isDark])
+
+  // 深色模式：首次加载时检测系统主题偏好
+  useEffect(() => {
+    const saved = localStorage.getItem('theme')
+    if (!saved) {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      useThemeStore.getState().setDark(prefersDark)
+    }
+  }, [])
 
   useEffect(() => {
     const init = async () => {
@@ -65,7 +85,14 @@ const App: React.FC = () => {
   }
 
   return (
-    <Router>
+    <ConfigProvider theme={{
+      algorithm: isDark ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
+      token: {
+        colorPrimary: '#1890ff',
+        borderRadius: 8,
+      },
+    }}>
+      <Router>
       {isAuthenticated ? (
         <AppLayout>
           <Routes>
@@ -84,6 +111,7 @@ const App: React.FC = () => {
             <Route path="/user/:id" element={<Suspense fallback={<LazyFallback />}><UserProfile /></Suspense>} />
             <Route path="/profile" element={<Suspense fallback={<LazyFallback />}><Profile /></Suspense>} />
             <Route path="/contact" element={<Suspense fallback={<LazyFallback />}><ContactUs /></Suspense>} />
+            <Route path="/guide" element={<UserGuide />} />
             <Route path="/admin/users" element={<AdminRoute><AdminUsers /></AdminRoute>} />
             <Route path="/admin/config" element={<AdminRoute><AdminConfig /></AdminRoute>} />
             <Route path="/admin/messages" element={<AdminRoute><Suspense fallback={<LazyFallback />}><AdminMessages /></Suspense></AdminRoute>} />
@@ -99,6 +127,7 @@ const App: React.FC = () => {
       <PWAInstallPrompt />
       <PWAUpdatePrompt />
     </Router>
+    </ConfigProvider>
   )
 }
 

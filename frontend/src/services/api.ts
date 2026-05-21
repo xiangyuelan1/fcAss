@@ -343,6 +343,18 @@ export const predictionApi = {
 
   deletePrediction: (shareId: number) =>
     api.delete(`/prediction/predictions/${shareId}`),
+
+  // 跟单订阅/取消订阅
+  subscribeUser: (targetUserId: number) =>
+    api.post('/prediction/subscribe', { target_user_id: targetUserId }),
+
+  // 获取我订阅的用户及其最新预测
+  getSubscriptions: () =>
+    api.get('/prediction/subscriptions'),
+
+  // 策略回放
+  getStrategyReplay: (modelId: number, days?: number) =>
+    api.get(`/prediction/replay/${modelId}`, { params: { days } }),
 };
 
 // 认证API
@@ -533,6 +545,49 @@ export const socialApi = {
   getFollowing: (userId: number, params?: { page?: number; page_size?: number }) =>
     api.get(`/social/users/${userId}/following`, { params }),
   getFollowingUpdates: () => api.get('/social/following/updates'),
+};
+
+// 模型组合策略API
+export const ensembleApi = {
+  ensemblePredict: (data: {
+    task_ids: number[];
+    weights?: number[];
+    stock_code: string;
+  }) => api.post('/ensemble/predict', data),
+};
+
+// 特征重要性API（挂在 modelApi 下更语义化，此处独立导出方便引用）
+export const featureImportanceApi = {
+  getFeatureImportance: (modelId: number) =>
+    api.get(`/models/${modelId}/feature-importance`),
+};
+
+export const signalsApi = {
+  getSignals: () => api.get('/signals'),
+};
+
+export const leaderboardApi = {
+  getModelLeaderboard: (params?: { period?: string; limit?: number }) =>
+    api.get('/leaderboard/models', { params }),
+  getUserLeaderboard: (params?: { period?: string; limit?: number }) =>
+    api.get('/leaderboard/users', { params }),
+};
+
+export const recommendationApi = {
+  getStockRecommendations: (params?: { limit?: number }) =>
+    api.get('/recommendations/stocks', { params }),
+  getModelRecommendations: (params?: { limit?: number }) =>
+    api.get('/recommendations/models', { params }),
+};
+
+export const paperTradingApi = {
+  startPaperTrading: (data: {
+    model_id: number;
+    initial_capital?: number;
+    stock_codes?: string[];
+  }) => api.post('/paper-trading/start', data),
+  getPaperTradingStatus: (modelId: number) =>
+    api.get(`/paper-trading/status/${modelId}`),
 };
 
 export default api;

@@ -91,6 +91,21 @@ const LoginPage: React.FC = () => {
           opacity: 0.15;
           animation: float1 8s ease-in-out infinite;
         }
+        @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+          .login-card-glass {
+            background: rgba(255,255,255,0.08) !important;
+            backdrop-filter: blur(24px) !important;
+            -webkit-backdrop-filter: blur(24px) !important;
+          }
+        }
+        @media (max-width: 480px) {
+          .login-card-glass {
+            padding: 28px 20px !important;
+          }
+          .login-card-glass .login-logo {
+            font-size: 40px !important;
+          }
+        }
       `}</style>
 
       {/* 背景光球：营造深空氛围 */}
@@ -113,10 +128,8 @@ const LoginPage: React.FC = () => {
         position: 'relative',
         zIndex: 10,
       }}>
-        <div style={{
-          background: 'rgba(255,255,255,0.08)',
-          backdropFilter: 'blur(24px)',
-          WebkitBackdropFilter: 'blur(24px)',
+        <div className="login-card-glass" style={{
+          background: 'rgba(20,20,40,0.92)',
           borderRadius: 20,
           border: '1px solid rgba(255,255,255,0.12)',
           boxShadow: '0 20px 60px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)',
@@ -124,7 +137,7 @@ const LoginPage: React.FC = () => {
         }}>
           {/* Logo 区域：牛牛吉祥物 + 品牌标语 */}
           <div style={{ textAlign: 'center', marginBottom: 32 }}>
-            <div style={{ fontSize: 56, marginBottom: 8, lineHeight: 1 }}>🐂</div>
+            <div className="login-logo" style={{ fontSize: 56, marginBottom: 8, lineHeight: 1 }}>🐂</div>
             <Title level={3} style={{ color: '#fff', marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>
               AI量化训练
             </Title>

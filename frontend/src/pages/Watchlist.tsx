@@ -22,6 +22,7 @@ import {
   InputNumber,
   Statistic,
   Alert,
+  Skeleton,
 } from 'antd'
 import {
   PlusOutlined,
@@ -48,6 +49,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { watchlistApi, dataApi, featureApi } from '@/services/api'
 import { Indicator, Stock, CustomIndicator } from '@/types'
+import { useMobileGestures } from '@/hooks/useMobileGestures'
 
 const { Option, OptGroup } = Select
 
@@ -194,6 +196,21 @@ const WatchlistPage: React.FC = () => {
   })
 
   const hasAutoExpanded = useRef(false)
+  const [initialLoading, setInitialLoading] = useState(true)
+
+  const gestures = useMobileGestures({
+    onPullDown: () => fetchWatchlists(),
+    onSwipeLeft: () => {
+      const tabs = ['watchlist', 'stockPool', 'featureEngineering']
+      const idx = tabs.indexOf(activeTab)
+      if (idx < tabs.length - 1) setActiveTab(tabs[idx + 1])
+    },
+    onSwipeRight: () => {
+      const tabs = ['watchlist', 'stockPool', 'featureEngineering']
+      const idx = tabs.indexOf(activeTab)
+      if (idx > 0) setActiveTab(tabs[idx - 1])
+    },
+  })
 
   const fetchWatchlists = useCallback(async () => {
     setWlLoading(true)
@@ -304,8 +321,11 @@ const WatchlistPage: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    fetchWatchlists()
-    fetchAutoPredictPool()
+    const init = async () => {
+      await Promise.all([fetchWatchlists(), fetchAutoPredictPool()])
+      setInitialLoading(false)
+    }
+    init()
   }, [fetchWatchlists, fetchAutoPredictPool])
 
   useEffect(() => {
@@ -1688,8 +1708,32 @@ const WatchlistPage: React.FC = () => {
     </div>
   )
 
+  if (initialLoading) {
+    return (
+      <div>
+        <Row gutter={[16, 16]}>
+          <Col xs={24} lg={16}>
+            <Card>
+              <Skeleton active paragraph={{ rows: 1 }} style={{ marginBottom: 16 }} />
+              <Row gutter={[12, 12]}>
+                {[1, 2, 3].map((i) => (
+                  <Col xs={24} sm={12} md={8} key={i}>
+                    <Card size="small"><Skeleton active paragraph={{ rows: 2 }} /></Card>
+                  </Col>
+                ))}
+              </Row>
+            </Card>
+          </Col>
+          <Col xs={24} lg={8}>
+            <Card size="small"><Skeleton active paragraph={{ rows: 4 }} /></Card>
+          </Col>
+        </Row>
+      </div>
+    )
+  }
+
   return (
-    <div>
+    <div {...gestures} style={{ minHeight: '100%' }}>
       <div style={{ marginBottom: 16 }}>
         <h1 className="page-title" style={{ marginBottom: 4 }}>自选股</h1>
         <p className="page-description" style={{ marginBottom: 0 }}>

@@ -702,3 +702,164 @@ async def delete_prediction(
     db.delete(share)
     db.commit()
     return {"success": True, "message": "预测已删除"}
+
+
+# ============================================================
+# 跟单预测（订阅通知）
+# ============================================================
+
+class SubscriptionRequest(BaseModel):
+    """跟单订阅请求"""
+    target_user_id: int
+
+
+@router.post("/subscribe")
+async def subscribe_user(
+    request: SubscriptionRequest,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """订阅/取消订阅某用户的预测（toggle 模式）
+
+    复用已有的 Follow 模型，避免数据冗余。
+    已订阅则取消，未订阅则创建。
+    """
+    from app.models.follow import Follow
+
+    if current_user.id == request.target_user_id:
+        raise HTTPException(status_code=400, detail="不能订阅自己")
+
+    target = db.query(UserModel).filter(UserModel.id == request.target_user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="目标用户不存在")
+
+    existing = db.query(Follow).filter(
+        Follow.follower_id == current_user.id,
+        Follow.following_id == request.target_user_id,
+    ).first()
+
+    if existing:
+        db.delete(existing)
+        db.commit()
+        return {"subscribed": False, "message": f"已取消订阅 {target.username}"}
+
+    sub = Follow(follower_id=current_user.id, following_id=request.target_user_id)
+    db.add(sub)
+    db.commit()
+    return {"subscribed": True, "message": f"已订阅 {target.username}"}
+
+
+@router.get("/subscriptions")
+async def get_subscriptions(
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """获取我订阅的用户及其最新预测"""
+    from app.models.follow import Follow
+
+    follows = db.query(Follow).filter(Follow.follower_id == current_user.id).all()
+    if not follows:
+        return {"subscriptions": []}
+
+    # 批量查询被关注用户，避免 N+1
+    following_ids = [f.following_id for f in follows]
+    users = db.query(UserModel).filter(UserModel.id.in_(following_ids)).all()
+    user_map = {u.id: u for u in users}
+
+    # 批量查询每个被关注用户的最新一条预测
+    results = []
+    for uid in following_ids:
+        user = user_map.get(uid)
+        latest = db.query(PredictionShare).filter(
+            PredictionShare.user_id == uid,
+            PredictionShare.is_published == True,
+        ).order_by(PredictionShare.created_at.desc()).first()
+
+        results.append({
+            'user_id': uid,
+            'username': user.username if user else '未知',
+            'nickname': getattr(user, 'nickname', None) or user.username if user else '未知',
+            'latest_prediction': latest.to_dict() if latest else None,
+        })
+
+    return {"subscriptions": results}
+
+
+# ============================================================
+# 策略回放
+# ============================================================
+
+@router.get("/replay/{model_id}")
+async def strategy_replay(
+    model_id: int,
+    days: int = Query(30, ge=7, le=90),
+    db: Session = Depends(get_db),
+):
+    """策略回放 - 展示模型过去N天的预测记录与实际行情对比
+
+    对每条已发布预测，获取对应股票在预测日之后的实际收盘价，
+    计算实际涨跌方向并与预测方向对比，判断是否正确。
+    """
+    start = datetime.now() - timedelta(days=days)
+
+    shares = db.query(PredictionShare).filter(
+        PredictionShare.model_id == model_id,
+        PredictionShare.is_published == True,
+        PredictionShare.created_at >= start,
+    ).order_by(PredictionShare.created_at.asc()).all()
+
+    if not shares:
+        return {
+            'replay': [],
+            'summary': {'total': 0, 'correct': 0, 'accuracy': 0, 'days': days},
+        }
+
+    data_service = DataService(db)
+    replay = []
+
+    for s in shares:
+        actual_close = None
+        actual_change = None
+        actual_direction = None
+        correct = None
+
+        try:
+            prices = data_service.get_stock_prices(s.stock_code, limit=2)
+            if prices and len(prices) >= 2:
+                # prices 按日期升序，取最后两条对比涨跌
+                actual_close = float(prices[-1].close) if prices[-1].close is not None else None
+                prev_close = float(prices[-2].close) if prices[-2].close is not None else None
+                if actual_close is not None and prev_close is not None and prev_close > 0:
+                    actual_change = (actual_close - prev_close) / prev_close
+                    if actual_change > 0:
+                        actual_direction = 'up'
+                    elif actual_change < 0:
+                        actual_direction = 'down'
+                    else:
+                        actual_direction = 'flat'
+                    correct = (s.direction == actual_direction)
+        except Exception:
+            # 数据获取失败时不影响其他记录，但保留 None 标识
+            pass
+
+        replay.append({
+            **s.to_dict(),
+            'actual_close': actual_close,
+            'actual_change': round(actual_change * 100, 2) if actual_change is not None else None,
+            'actual_direction': actual_direction,
+            'correct': correct,
+        })
+
+    total = len(replay)
+    correct_count = sum(1 for r in replay if r['correct'] is True)
+    accuracy = round(correct_count / total, 3) if total > 0 else 0
+
+    return {
+        'replay': replay,
+        'summary': {
+            'total': total,
+            'correct': correct_count,
+            'accuracy': accuracy,
+            'days': days,
+        },
+    }
