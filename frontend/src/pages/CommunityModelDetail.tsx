@@ -40,6 +40,7 @@ import {
 import { useNavigate, useParams } from 'react-router-dom'
 import { communityApi } from '@/services/api'
 import { CommunityModel, CommunitySignal } from '@/types'
+import FunPredictionResult from '@/components/FunPredictionResult'
 
 const MODEL_TYPE_COLORS: Record<string, string> = {
   lstm: 'blue',
@@ -600,28 +601,18 @@ const CommunityModelDetail: React.FC = () => {
           </div>
 
           {predictResult && (
-            <Card size="small" title="预测结果" style={{ marginTop: 8 }}>
-              <Descriptions column={1} size="small">
-                <Descriptions.Item label="股票代码">{predictResult.stock_code}</Descriptions.Item>
-                <Descriptions.Item label="预测日期">{predictResult.predict_date}</Descriptions.Item>
-                <Descriptions.Item label="预测值">{predictResult.prediction}</Descriptions.Item>
-                <Descriptions.Item label="预测方向">
-                  <Tag color={predictResult.prediction_label === '看涨' ? 'red' : predictResult.prediction_label === '看跌' ? 'green' : 'default'}>
-                    {predictResult.prediction_label}
-                  </Tag>
-                </Descriptions.Item>
-                {predictResult.latest_data && (
-                  <>
-                    <Descriptions.Item label="最新收盘价">
-                      ¥{predictResult.latest_data.close?.toFixed(2)}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="最新日期">
-                      {predictResult.latest_data.date}
-                    </Descriptions.Item>
-                  </>
-                )}
-              </Descriptions>
-            </Card>
+            <FunPredictionResult
+              direction={predictResult.prediction_label || predictResult.direction || 'flat'}
+              confidence={predictResult.confidence}
+              stockCode={predictStockCode}
+              predictedPrice={predictResult.predicted_close || predictResult.predicted_price}
+              predictedChangePct={predictResult.predicted_change_pct}
+              targetType={model?.target}
+              predictedOpen={predictResult.predicted_open}
+              predictedHigh={predictResult.predicted_high}
+              predictedLow={predictResult.predicted_low}
+              compact={false}
+            />
           )}
         </div>
       </Modal>

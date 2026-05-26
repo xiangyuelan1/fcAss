@@ -18,6 +18,7 @@ import {
   Table,
   message,
   Skeleton,
+  Alert,
 } from 'antd'
 import {
   HeartOutlined,
@@ -48,6 +49,7 @@ import {
   ReplaySummary,
 } from '@/types'
 import DailyGuess from '@/components/DailyGuess'
+import FunPredictionResult from '@/components/FunPredictionResult'
 
 const MODEL_TYPE_COLORS: Record<string, string> = {
   lstm: 'blue',
@@ -102,6 +104,15 @@ const Community: React.FC = () => {
   const [predictionSortBy, setPredictionSortBy] = useState('newest')
   const [activeTab, setActiveTab] = useState('models')
   const [initialLoading, setInitialLoading] = useState(true)
+
+  // 卡片内展开预测
+  const [expandedModelId, setExpandedModelId] = useState<number | null>(null)
+  const [predictStockCode, setPredictStockCode] = useState('600519')
+  const [predictingModelId, setPredictingModelId] = useState<number | null>(null)
+  const [predictionResult, setPredictionResult] = useState<Record<number, any>>({})
+
+  // 按股票代码筛选模型
+  const [stockFilter, setStockFilter] = useState('')
 
   // 排行榜
   const [modelLeaderboard, setModelLeaderboard] = useState<ModelLeaderboardItem[]>([])
@@ -290,6 +301,33 @@ const Community: React.FC = () => {
     }
   }
 
+  const handleCommunityPredict = async (model: CommunityModel) => {
+    if (!predictStockCode) {
+      message.warning('请输入股票代码')
+      return
+    }
+    setPredictingModelId(model.id)
+    try {
+      const data = await communityApi.predictWithModel(model.id, {
+        stock_code: predictStockCode,
+        days: 1,
+      })
+      setPredictionResult(prev => ({ ...prev, [model.id]: data }))
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      if (typeof detail === 'string' && detail.includes('dimension')) {
+        const supportedCodes = model.stock_codes?.join(', ') || '未知'
+        message.error(`该模型仅支持预测其训练股票：${supportedCodes}，请输入以上股票代码`)
+      } else if (typeof detail === 'string') {
+        message.error(detail)
+      } else {
+        message.error('预测失败')
+      }
+    } finally {
+      setPredictingModelId(null)
+    }
+  }
+
   const getDirectionColor = (direction: string) => {
     if (direction === 'up') return 'red'
     if (direction === 'down') return 'green'
@@ -322,148 +360,217 @@ const Community: React.FC = () => {
     return date.toLocaleDateString()
   }
 
-  const renderModelSquare = () => (
-    <Spin spinning={modelsLoading}>
-      {models.length === 0 && !modelsLoading ? (
-        <Empty description="暂无社区模型" />
-      ) : (
-        <Row gutter={[16, 16]}>
-          {models.map((model) => (
-            <Col xs={24} sm={12} key={model.id}>
-              <Card
-                hoverable
-                onClick={() => navigate(`/community/model/${model.id}`)}
-                style={{ height: '100%' }}
-              >
-                <div style={{ marginBottom: 12 }}>
-                  <Space>
-                    <Tag color={MODEL_TYPE_COLORS[model.model_type] || 'default'}>
-                      {model.model_type.toUpperCase()}
-                    </Tag>
-                    {model.metrics && model.metrics.accuracy !== undefined && (
-                      <Tag color="blue">
-                        准确率 {(model.metrics.accuracy * 100).toFixed(1)}%
-                      </Tag>
-                    )}
-                  </Space>
-                </div>
-                <h3 style={{ marginBottom: 8 }}>{model.name}</h3>
-                <p style={{ color: '#999', fontSize: 13, marginBottom: 12, minHeight: 40 }}>
-                  {model.description || '暂无描述'}
-                </p>
-                {/* 战绩展示 */}
-                {model.prediction_summary && model.prediction_summary.accuracy > 0 && (
+  const renderModelSquare = () => {
+    const filteredModels = models.filter(m => {
+      if (stockFilter) {
+        return m.stock_codes?.some((code: string) => code.includes(stockFilter))
+      }
+      return true
+    })
+
+    return (
+      <Spin spinning={modelsLoading}>
+        {filteredModels.length === 0 && !modelsLoading ? (
+          <Empty description={stockFilter ? '未找到可预测该股票的模型' : '暂无社区模型'} />
+        ) : (
+          <Row gutter={[16, 16]}>
+            {filteredModels.map((model) => (
+              <Col xs={24} sm={12} key={model.id}>
+                <Card hoverable style={{ height: '100%' }}>
                   <div style={{ marginBottom: 12 }}>
-                    <Space size={8} wrap>
-                      <Tag color="blue" style={{ fontSize: 11 }}>
-                        准确率 {(model.prediction_summary.accuracy * 100).toFixed(1)}%
+                    <Space>
+                      <Tag color={MODEL_TYPE_COLORS[model.model_type] || 'default'}>
+                        {model.model_type.toUpperCase()}
                       </Tag>
-                      {model.prediction_summary.current_streak > 0 && (
-                        <Tag color="orange" style={{ fontSize: 11 }}>
-                          连胜 {model.prediction_summary.current_streak}
+                      {model.metrics && model.metrics.accuracy !== undefined && (
+                        <Tag color="blue">
+                          准确率 {(model.metrics.accuracy * 100).toFixed(1)}%
                         </Tag>
                       )}
-                      {model.prediction_summary.badges.map((badge) => (
-                        <Tag
-                          key={badge}
-                          color={
-                            badge.includes('预言大师') ? 'gold' :
-                            badge.includes('精准猎手') ? 'green' :
-                            badge.includes('反向指标') ? 'red' :
-                            badge.includes('百战老兵') ? 'purple' :
-                            badge.includes('资深预测') ? 'cyan' :
-                            badge.includes('七日连胜') ? 'volcano' :
-                            badge.includes('五连绝世') ? 'orange' :
-                            'geekblue'
-                          }
-                          style={{ fontSize: 11 }}
-                        >
-                          {badge}
-                        </Tag>
-                      ))}
                     </Space>
                   </div>
-                )}
-                <div style={{ marginBottom: 12 }}>
-                  <Space size={4} wrap>
-                    {model.features.slice(0, 4).map((f) => (
-                      <Tag key={f} style={{ fontSize: 11 }}>{f}</Tag>
-                    ))}
-                    {model.features.length > 4 && (
-                      <Tag style={{ fontSize: 11 }}>+{model.features.length - 4}</Tag>
-                    )}
-                  </Space>
-                </div>
-                <div style={{ marginBottom: 12 }}>
-                  <Button
-                    type="primary"
-                    icon={<ThunderboltOutlined />}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      navigate(`/community/model/${model.id}`)
-                    }}
-                    block
-                    style={{
-                      background: 'linear-gradient(135deg, #1890ff 0%, #36cfc9 100%)',
-                      border: 'none',
-                      fontWeight: 600,
-                      fontSize: 14,
-                      height: 36,
-                      borderRadius: 6,
-                    }}
+                  <h3
+                    style={{ marginBottom: 8, cursor: 'pointer' }}
+                    onClick={() => navigate(`/community/model/${model.id}`)}
                   >
-                    🔮 一键预测
-                  </Button>
-                </div>
-                <Row justify="space-between" align="middle">
-                  <Col>
-                    <Space>
-                      <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
-                        {model.author?.username?.[0] || '?'}
-                      </Avatar>
-                      <span style={{ fontSize: 13 }}>{model.author?.username || '匿名'}</span>
+                    {model.name}
+                  </h3>
+                  <p style={{ color: '#999', fontSize: 13, marginBottom: 12, minHeight: 40 }}>
+                    {model.description || '暂无描述'}
+                  </p>
+                  {/* 战绩展示 */}
+                  {model.prediction_summary && model.prediction_summary.accuracy > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <Space size={8} wrap>
+                        <Tag color="blue" style={{ fontSize: 11 }}>
+                          准确率 {(model.prediction_summary.accuracy * 100).toFixed(1)}%
+                        </Tag>
+                        {model.prediction_summary.current_streak > 0 && (
+                          <Tag color="orange" style={{ fontSize: 11 }}>
+                            连胜 {model.prediction_summary.current_streak}
+                          </Tag>
+                        )}
+                        {model.prediction_summary.badges.map((badge) => (
+                          <Tag
+                            key={badge}
+                            color={
+                              badge.includes('预言大师') ? 'gold' :
+                              badge.includes('精准猎手') ? 'green' :
+                              badge.includes('反向指标') ? 'red' :
+                              badge.includes('百战老兵') ? 'purple' :
+                              badge.includes('资深预测') ? 'cyan' :
+                              badge.includes('七日连胜') ? 'volcano' :
+                              badge.includes('五连绝世') ? 'orange' :
+                              'geekblue'
+                            }
+                            style={{ fontSize: 11 }}
+                          >
+                            {badge}
+                          </Tag>
+                        ))}
+                      </Space>
+                    </div>
+                  )}
+                  {/* 可预测股票标签 */}
+                  {model.stock_codes && model.stock_codes.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <span style={{ fontSize: 11, color: '#999', marginRight: 4 }}>可预测:</span>
+                      {model.stock_codes.slice(0, 5).map((code: string) => (
+                        <Tag key={code} style={{ fontSize: 10 }} color="blue">{code}</Tag>
+                      ))}
+                      {model.stock_codes.length > 5 && (
+                        <Tag style={{ fontSize: 10 }}>+{model.stock_codes.length - 5}</Tag>
+                      )}
+                    </div>
+                  )}
+                  <div style={{ marginBottom: 12 }}>
+                    <Space size={4} wrap>
+                      {model.features.slice(0, 4).map((f) => (
+                        <Tag key={f} style={{ fontSize: 11 }}>{f}</Tag>
+                      ))}
+                      {model.features.length > 4 && (
+                        <Tag style={{ fontSize: 11 }}>+{model.features.length - 4}</Tag>
+                      )}
                     </Space>
-                  </Col>
-                  <Col>
-                    <Space size={16}>
-                      <span
-                        style={{ cursor: 'pointer', color: model.is_liked ? '#eb2f96' : '#999' }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleLikeModel(model.id)
-                        }}
-                      >
-                        <HeartOutlined /> {model.likes_count}
-                      </span>
-                      <span
-                        style={{ cursor: 'pointer', color: '#999' }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleCloneModel(model.id)
-                        }}
-                      >
-                        <CopyOutlined /> {model.clones_count}
-                      </span>
-                      <span
-                        style={{ cursor: 'pointer', color: '#1890ff' }}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleReplay(model.source_model_id, model.name)
-                        }}
-                        title="策略回放"
-                      >
-                        <PlayCircleOutlined /> 回放
-                      </span>
-                    </Space>
-                  </Col>
-                </Row>
-              </Card>
-            </Col>
-          ))}
-        </Row>
-      )}
-    </Spin>
-  )
+                  </div>
+                  <div style={{ marginBottom: 12 }}>
+                    <Button
+                      type="primary"
+                      icon={<ThunderboltOutlined />}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setExpandedModelId(expandedModelId === model.id ? null : model.id)
+                      }}
+                      block
+                      style={{
+                        background: 'linear-gradient(135deg, #1890ff 0%, #36cfc9 100%)',
+                        border: 'none',
+                        fontWeight: 600,
+                        fontSize: 14,
+                        height: 36,
+                        borderRadius: 6,
+                      }}
+                    >
+                      {expandedModelId === model.id ? '收起' : '🔮 预测'}
+                    </Button>
+                  </div>
+                  {/* 展开的预测区域 */}
+                  {expandedModelId === model.id && (
+                    <div
+                      style={{ marginTop: 12, padding: 12, background: '#f6f8fa', borderRadius: 8 }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <Input
+                          placeholder="输入股票代码（如 600519）"
+                          value={predictStockCode}
+                          onChange={(e) => setPredictStockCode(e.target.value)}
+                          style={{ flex: 1 }}
+                          size="small"
+                        />
+                        <Button
+                          type="primary"
+                          size="small"
+                          loading={predictingModelId === model.id}
+                          onClick={() => handleCommunityPredict(model)}
+                        >
+                          预测！
+                        </Button>
+                      </div>
+                      {/* 特征维度不匹配警告 */}
+                      {model.stock_codes && !model.stock_codes.includes(predictStockCode) && predictStockCode && (
+                        <Alert
+                          style={{ marginTop: 8 }}
+                          message="该模型未使用此股票训练，预测结果可能不准确"
+                          type="warning"
+                          showIcon
+                        />
+                      )}
+                      {/* 预测结果 */}
+                      {predictionResult[model.id] && (
+                        <div style={{ marginTop: 12 }}>
+                          <FunPredictionResult
+                            direction={predictionResult[model.id].prediction_label || predictionResult[model.id].direction || 'flat'}
+                            confidence={predictionResult[model.id].confidence}
+                            stockCode={predictStockCode}
+                            predictedPrice={predictionResult[model.id].predicted_close || predictionResult[model.id].predicted_price}
+                            predictedChangePct={predictionResult[model.id].predicted_change_pct}
+                            compact={true}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <Row justify="space-between" align="middle">
+                    <Col>
+                      <Space>
+                        <Avatar size="small" style={{ backgroundColor: '#1890ff' }}>
+                          {model.author?.username?.[0] || '?'}
+                        </Avatar>
+                        <span style={{ fontSize: 13 }}>{model.author?.username || '匿名'}</span>
+                      </Space>
+                    </Col>
+                    <Col>
+                      <Space size={16}>
+                        <span
+                          style={{ cursor: 'pointer', color: model.is_liked ? '#eb2f96' : '#999' }}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleLikeModel(model.id)
+                          }}
+                        >
+                          <HeartOutlined /> {model.likes_count}
+                        </span>
+                        <span
+                          style={{ cursor: 'pointer', color: '#999' }}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleCloneModel(model.id)
+                          }}
+                        >
+                          <CopyOutlined /> {model.clones_count}
+                        </span>
+                        <span
+                          style={{ cursor: 'pointer', color: '#1890ff' }}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleReplay(model.source_model_id, model.name)
+                          }}
+                          title="策略回放"
+                        >
+                          <PlayCircleOutlined /> 回放
+                        </span>
+                      </Space>
+                    </Col>
+                  </Row>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        )}
+      </Spin>
+    )
+  }
 
   const renderPredictionShare = () => (
     <Spin spinning={predictionsLoading}>
@@ -967,7 +1074,7 @@ const Community: React.FC = () => {
       children: (
         <div>
           <Row gutter={[16, 12]} style={{ marginBottom: 16 }}>
-            <Col xs={24} sm={8}>
+            <Col xs={24} sm={6}>
               <Input.Search
                 placeholder="搜索模型名称或描述"
                 value={searchText}
@@ -977,7 +1084,16 @@ const Community: React.FC = () => {
                 allowClear
               />
             </Col>
-            <Col xs={12} sm={8}>
+            <Col xs={12} sm={6}>
+              <Input
+                placeholder="🔍 按可预测股票筛选（如 600519）"
+                prefix={<SearchOutlined />}
+                value={stockFilter}
+                onChange={(e) => setStockFilter(e.target.value)}
+                allowClear
+              />
+            </Col>
+            <Col xs={6} sm={6}>
               <Select
                 style={{ width: '100%' }}
                 options={TYPE_OPTIONS}
@@ -985,7 +1101,7 @@ const Community: React.FC = () => {
                 onChange={(val) => setModelType(val)}
               />
             </Col>
-            <Col xs={12} sm={8}>
+            <Col xs={6} sm={6}>
               <Select
                 style={{ width: '100%' }}
                 options={SORT_OPTIONS}

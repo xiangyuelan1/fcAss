@@ -2,14 +2,12 @@ import React, { useState, useEffect } from 'react'
 import { Layout, Menu, Button, Modal, theme, Dropdown, Avatar, Space, Badge, Drawer } from 'antd'
 import {
   DashboardOutlined,
-  RobotOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   AppstoreOutlined,
   LogoutOutlined,
   UserOutlined,
   PayCircleOutlined,
-  ThunderboltOutlined,
   TeamOutlined,
   SettingOutlined,
   CrownOutlined,
@@ -18,7 +16,6 @@ import {
   MailOutlined,
   CustomerServiceOutlined,
   QuestionCircleOutlined,
-  StarOutlined,
   BookOutlined,
   BellOutlined,
   AndroidOutlined,
@@ -165,28 +162,14 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       label: '我的工作台',
     },
     {
-      key: 'model-group',
-      icon: <RobotOutlined />,
-      label: '模型管理',
-      children: [
-        { key: '/models', icon: <RobotOutlined />, label: '我的模型' },
-        { key: '/watchlist', icon: <StarOutlined />, label: '自选股' },
-      ],
-    },
-    {
-      key: '/train-predict',
-      icon: <ThunderboltOutlined />,
-      label: '训练与预测',
+      key: '/guide',
+      icon: <BookOutlined />,
+      label: '使用说明',
     },
     {
       key: '/contact',
       icon: <CustomerServiceOutlined />,
       label: '联系开发团队',
-    },
-    {
-      key: '/guide',
-      icon: <BookOutlined />,
-      label: '使用说明',
     },
     {
       key: '__onboarding__',
@@ -228,10 +211,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   // 移动端底部导航栏（选择最核心的5个功能入口）
   const bottomNavItems = [
     { key: '/community', icon: <GlobalOutlined />, label: '社区' },
-    { key: '/models', icon: <RobotOutlined />, label: '模型' },
     { key: '/', icon: <DashboardOutlined />, label: '工作台' },
-    { key: '/train-predict', icon: <ThunderboltOutlined />, label: '训练预测' },
-    { key: '/watchlist', icon: <StarOutlined />, label: '自选股' },
+    { key: '/guide', icon: <BookOutlined />, label: '使用说明' },
   ]
 
   const handleMenuClick = (key: string) => {
