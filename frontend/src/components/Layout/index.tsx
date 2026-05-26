@@ -155,14 +155,14 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
 
   const menuItems = [
     {
-      key: '/',
-      icon: <DashboardOutlined />,
-      label: '我的工作台',
-    },
-    {
       key: '/community',
       icon: <GlobalOutlined />,
       label: '社区',
+    },
+    {
+      key: '/',
+      icon: <DashboardOutlined />,
+      label: '我的工作台',
     },
     {
       key: 'model-group',
@@ -228,8 +228,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
   // 移动端底部导航栏（选择最核心的5个功能入口）
   const bottomNavItems = [
     { key: '/community', icon: <GlobalOutlined />, label: '社区' },
-    { key: '/', icon: <DashboardOutlined />, label: '工作台' },
     { key: '/models', icon: <RobotOutlined />, label: '模型' },
+    { key: '/', icon: <DashboardOutlined />, label: '工作台' },
     { key: '/train-predict', icon: <ThunderboltOutlined />, label: '训练预测' },
     { key: '/watchlist', icon: <StarOutlined />, label: '自选股' },
   ]

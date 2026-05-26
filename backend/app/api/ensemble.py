@@ -17,6 +17,7 @@ from app.models.training import TrainingTask
 from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
 from app.services.feature_service import FeatureService
 from app.services.data_service import DataService
+from app.api.prediction import _ensure_stock_data
 
 router = APIRouter()
 
@@ -142,23 +143,11 @@ async def ensemble_predict(
         except ValueError as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        # 确保股票有数据
-        stock_info = data_service.get_stock_by_code(request.stock_code)
-        if not stock_info:
-            try:
-                data_service.fetch_stock_data(request.stock_code)
-            except Exception:
-                raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 数据获取失败")
-
-        # 计算特征
-        df = feature_service.calculate_features(
-            stock_code=request.stock_code,
-            indicators=user_model.features,
-            indicator_params=user_model.feature_config or {},
-            limit=5000
+        # 确保股票有足够数据（自动获取和补充），并计算特征
+        df = _ensure_stock_data(
+            data_service, feature_service, request.stock_code,
+            user_model.features, user_model.feature_config or {},
         )
-        if df is None or df.empty:
-            raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 无可用数据")
 
         exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
                         'change_pct', 'change_amount', 'adj_close'}

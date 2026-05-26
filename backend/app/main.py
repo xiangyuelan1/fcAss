@@ -2,6 +2,7 @@
 FastAPI应用主入口
 """
 import asyncio
+from datetime import datetime, timedelta
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -20,8 +21,10 @@ from app.models.user_prefs import UserStockPrefs, UserModelPrefs
 from app.models.system_config import SystemConfig
 from app.models.watchlist import Watchlist, WatchlistItem
 from app.models.daily_guess import DailyGuessStock, DailyGuessVote
+from app.models.community import CommunityModel, CommunitySignal
 from app.api import api_router
 from app.auth import get_password_hash
+import logging
 
 
 class ConnectionManager:
@@ -134,6 +137,214 @@ def _sync_stock_pool_on_startup():
         db.close()
 
 
+def _compute_badges(total: int, correct: int, current_streak: int, best_streak: int) -> list[str]:
+    """根据预测战绩计算称号列表"""
+    badges: list[str] = []
+    accuracy = correct / total if total > 0 else 0.0
+
+    if current_streak >= 7:
+        badges.append("七日连胜 🏆")
+    elif current_streak >= 5:
+        badges.append("五连绝世 ⚡")
+    elif current_streak >= 3:
+        badges.append("连中三元 🔥")
+
+    if total >= 10:
+        if accuracy >= 0.8:
+            badges.append("预言大师 👑")
+        elif accuracy >= 0.7:
+            badges.append("精准猎手 🎯")
+        if accuracy < 0.3:
+            badges.append("反向指标 🔄")
+
+    if total >= 100:
+        badges.append("百战老兵 💎")
+    elif total >= 30:
+        badges.append("资深预测 📊")
+
+    return badges
+
+
+async def auto_predict_community_models():
+    """后台任务：每日自动为社区模型执行预测并更新战绩
+
+    首次启动延迟5分钟执行，之后每24小时执行一次。
+    对每个开启自动预测的活跃社区模型，取其关联股票的前3只进行预测，
+    同时回溯前一天预测与实际涨跌对比，更新正确/错误统计和称号。
+    """
+    logger = logging.getLogger(__name__)
+    await asyncio.sleep(300)
+
+    while True:
+        db = SessionLocal()
+        try:
+            models = db.query(CommunityModel).filter(
+                CommunityModel.auto_predict == True,
+                CommunityModel.is_active == True,
+            ).all()
+
+            today_str = datetime.now().strftime("%Y-%m-%d")
+
+            for cm in models:
+                try:
+                    latest_task = db.query(TrainingTask).filter(
+                        TrainingTask.model_id == cm.source_model_id,
+                        TrainingTask.status == 'completed',
+                    ).order_by(TrainingTask.created_at.desc()).first()
+
+                    if not latest_task:
+                        continue
+
+                    from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
+                    try:
+                        model, metrics, input_size, feature_window = ModelCheckpoint.load_checkpoint(latest_task.id)
+                    except (FileNotFoundError, ValueError):
+                        continue
+
+                    from app.services.feature_service import FeatureService
+                    from app.services.data_service import DataService
+                    from app.api.prediction import _do_predict, _prediction_to_label
+
+                    feature_service = FeatureService(db)
+                    data_service = DataService(db)
+
+                    stock_codes = cm.stock_codes or []
+                    predict_codes = stock_codes[:3]
+
+                    record = cm.prediction_record or {}
+                    daily_records = record.get("daily_records", [])
+
+                    # 回溯前一天预测，对比实际涨跌
+                    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                    updated = False
+                    for dr in daily_records:
+                        if dr.get("date") == yesterday_str and dr.get("actual") is None:
+                            try:
+                                prices = data_service.get_stock_prices(dr["stock_code"], limit=2)
+                                if prices and len(prices) >= 2:
+                                    change_pct = float(prices[-1].change_pct) if prices[-1].change_pct else 0.0
+                                    actual = "up" if change_pct > 0 else ("down" if change_pct < 0 else "flat")
+                                    dr["actual"] = actual
+                                    dr["correct"] = (dr["direction"] == actual)
+                                    updated = True
+                            except Exception:
+                                pass
+
+                    # 重新计算统计
+                    if updated:
+                        verified = [dr for dr in daily_records if dr.get("actual") is not None]
+                        total_p = len(verified)
+                        correct_p = sum(1 for dr in verified if dr.get("correct") is True)
+                        accuracy = round(correct_p / total_p, 3) if total_p > 0 else 0.0
+
+                        # 计算连胜
+                        current_streak = 0
+                        best_streak = 0
+                        streak = 0
+                        for dr in reversed(verified):
+                            if dr.get("correct") is True:
+                                streak += 1
+                                best_streak = max(best_streak, streak)
+                            else:
+                                if current_streak == 0:
+                                    current_streak = streak
+                                streak = 0
+                        if current_streak == 0 and streak > 0:
+                            current_streak = streak
+
+                        record["total_predictions"] = total_p
+                        record["correct_predictions"] = correct_p
+                        record["accuracy"] = accuracy
+                        record["current_streak"] = current_streak
+                        record["best_streak"] = best_streak
+                        record["badges"] = _compute_badges(total_p, correct_p, current_streak, best_streak)
+
+                    # 执行今日预测
+                    for code in predict_codes:
+                        existing_today = any(
+                            dr.get("date") == today_str and dr.get("stock_code") == code
+                            for dr in daily_records
+                        )
+                        if existing_today:
+                            continue
+
+                        try:
+                            stock_info = data_service.get_stock_by_code(code)
+                            if not stock_info:
+                                data_service.fetch_stock_data(code)
+
+                            df = feature_service.calculate_features(
+                                stock_code=code,
+                                indicators=cm.features,
+                                indicator_params=cm.feature_config or {},
+                                limit=5000,
+                            )
+                            if df is None or df.empty:
+                                continue
+
+                            exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
+                                            'change_pct', 'change_amount', 'adj_close'}
+                            feature_cols = [col for col in df.columns if col not in exclude_cols]
+                            if not feature_cols:
+                                continue
+
+                            if feature_window > 1:
+                                if len(feature_cols) * feature_window != input_size:
+                                    continue
+                            else:
+                                if len(feature_cols) != input_size:
+                                    continue
+
+                            df_features = df[feature_cols].copy()
+                            df_features = (df_features - df_features.mean()) / df_features.std()
+
+                            prediction = _do_predict(model, cm.model_type, cm.model_config, df_features, input_size, feature_window)
+                            direction = _prediction_to_label(prediction, cm.target)
+
+                            # 写入 CommunitySignal
+                            signal = CommunitySignal(
+                                user_id=cm.user_id,
+                                community_model_id=cm.id,
+                                stock_code=code,
+                                direction=direction,
+                                prediction_value=round(float(prediction), 4),
+                                prediction_date=today_str,
+                            )
+                            db.add(signal)
+
+                            # 写入 daily_records
+                            daily_records.insert(0, {
+                                "date": today_str,
+                                "stock_code": code,
+                                "direction": direction,
+                                "actual": None,
+                                "correct": None,
+                            })
+
+                        except Exception as e:
+                            logger.warning(f"[自动预测] 模型{cm.id} 股票{code} 预测失败: {e}")
+                            continue
+
+                    # 更新 total_predictions（包含未验证的）
+                    record["daily_records"] = daily_records
+                    record["total_predictions"] = len(daily_records)
+                    cm.prediction_record = record
+
+                except Exception as e:
+                    logger.warning(f"[自动预测] 模型{cm.id} 处理失败: {e}")
+                    continue
+
+            db.commit()
+            logger.info(f"[自动预测] 完成，处理了 {len(models)} 个社区模型")
+        except Exception as e:
+            logger.error(f"[自动预测] 执行异常: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+        await asyncio.sleep(86400)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -147,6 +358,9 @@ async def lifespan(app: FastAPI):
 
     # 启动行情推送后台任务
     asyncio.create_task(market_data_pusher())
+
+    # 启动社区模型每日自动预测后台任务
+    asyncio.create_task(auto_predict_community_models())
 
     yield
 

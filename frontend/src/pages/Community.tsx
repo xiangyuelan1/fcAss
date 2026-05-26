@@ -32,6 +32,7 @@ import {
   BellOutlined,
   CheckCircleFilled,
   CloseCircleFilled,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { communityApi, pointsApi, predictionApi, socialApi, leaderboardApi } from '@/services/api'
@@ -350,6 +351,39 @@ const Community: React.FC = () => {
                 <p style={{ color: '#999', fontSize: 13, marginBottom: 12, minHeight: 40 }}>
                   {model.description || '暂无描述'}
                 </p>
+                {/* 战绩展示 */}
+                {model.prediction_summary && model.prediction_summary.accuracy > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <Space size={8} wrap>
+                      <Tag color="blue" style={{ fontSize: 11 }}>
+                        准确率 {(model.prediction_summary.accuracy * 100).toFixed(1)}%
+                      </Tag>
+                      {model.prediction_summary.current_streak > 0 && (
+                        <Tag color="orange" style={{ fontSize: 11 }}>
+                          连胜 {model.prediction_summary.current_streak}
+                        </Tag>
+                      )}
+                      {model.prediction_summary.badges.map((badge) => (
+                        <Tag
+                          key={badge}
+                          color={
+                            badge.includes('预言大师') ? 'gold' :
+                            badge.includes('精准猎手') ? 'green' :
+                            badge.includes('反向指标') ? 'red' :
+                            badge.includes('百战老兵') ? 'purple' :
+                            badge.includes('资深预测') ? 'cyan' :
+                            badge.includes('七日连胜') ? 'volcano' :
+                            badge.includes('五连绝世') ? 'orange' :
+                            'geekblue'
+                          }
+                          style={{ fontSize: 11 }}
+                        >
+                          {badge}
+                        </Tag>
+                      ))}
+                    </Space>
+                  </div>
+                )}
                 <div style={{ marginBottom: 12 }}>
                   <Space size={4} wrap>
                     {model.features.slice(0, 4).map((f) => (
@@ -359,6 +393,27 @@ const Community: React.FC = () => {
                       <Tag style={{ fontSize: 11 }}>+{model.features.length - 4}</Tag>
                     )}
                   </Space>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <Button
+                    type="primary"
+                    icon={<ThunderboltOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigate(`/community/model/${model.id}`)
+                    }}
+                    block
+                    style={{
+                      background: 'linear-gradient(135deg, #1890ff 0%, #36cfc9 100%)',
+                      border: 'none',
+                      fontWeight: 600,
+                      fontSize: 14,
+                      height: 36,
+                      borderRadius: 6,
+                    }}
+                  >
+                    🔮 一键预测
+                  </Button>
                 </div>
                 <Row justify="space-between" align="middle">
                   <Col>

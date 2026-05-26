@@ -1,5 +1,8 @@
-import React, { useEffect, useState } from 'react'
-import { Row, Col, Card, Statistic, List, Tag, Button, Steps, Alert, message, Divider, Collapse, Switch, Skeleton } from 'antd'
+import React, { useEffect, useState, useRef } from 'react'
+import {
+  Row, Col, Card, Statistic, Tag, Button, Steps, Alert, message,
+  Switch, Skeleton, Progress, Spin, Drawer, Modal, Select, Input, Form, Space,
+} from 'antd'
 import {
   DatabaseOutlined,
   RobotOutlined,
@@ -14,9 +17,14 @@ import {
   FallOutlined,
   MinusOutlined,
   QuestionCircleOutlined,
+  PlusOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { dataApi, modelApi, trainingApi, backtestApi, predictionApi, authApi, signalsApi } from '@/services/api'
+import {
+  dataApi, modelApi, trainingApi, backtestApi, predictionApi, authApi,
+  signalsApi, watchlistApi, communityApi,
+} from '@/services/api'
 import { UserModel, TrainingTask, PredictionShareItem } from '@/types'
 import { useAuthStore } from '@/store'
 import OnboardingGuide, { isOnboardingCompleted } from '@/components/OnboardingGuide'
@@ -33,9 +41,44 @@ interface StaleModel {
   new_data_count: number
 }
 
+const stageMap: Record<string, string> = {
+  data_preparation: '数据准备中',
+  training: '模型训练中',
+  validation: '验证中',
+  completed: '训练完成',
+}
+
+const formatDuration = (seconds: number) => {
+  if (seconds < 60) return `${Math.floor(seconds)}秒`
+  const minutes = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  if (minutes < 60) return `${minutes}分${secs}秒`
+  const hours = Math.floor(minutes / 60)
+  const mins = minutes % 60
+  return `${hours}时${mins}分`
+}
+
+const TARGET_OPTIONS = [
+  { label: '次日涨跌方向', value: 'next_day_direction' },
+  { label: '次日收益率', value: 'next_day_return' },
+  { label: '次日OHLC', value: 'next_day_ohlc' },
+  { label: '5日价格变化', value: 'price_change_5d' },
+  { label: '30日趋势', value: 'trend_30d' },
+]
+
+const MODEL_TYPE_OPTIONS = [
+  { label: 'MLP', value: 'mlp' },
+  { label: 'XGBoost', value: 'xgboost' },
+  { label: 'LSTM', value: 'lstm' },
+  { label: 'GRU', value: 'gru' },
+  { label: 'LightGBM', value: 'lightgbm' },
+  { label: 'RandomForest', value: 'randomforest' },
+]
+
 const Dashboard: React.FC = () => {
   const navigate = useNavigate()
   const { user, setUser } = useAuthStore()
+
   const [stats, setStats] = useState({
     stockCount: 0,
     modelCount: 0,
@@ -52,17 +95,57 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [liveQuotes, setLiveQuotes] = useState<any[]>([])
   const [signals, setSignals] = useState<any[]>([])
+  const [watchlistQuotes, setWatchlistQuotes] = useState<any[]>([])
+  const [quotesLoading, setQuotesLoading] = useState(false)
+
+  const [progressMap, setProgressMap] = useState<Record<number, any>>({})
+  const sseRefs = useRef<Record<number, EventSource>>({})
+
+  // 快速预测（社区模型）
+  const [communityModels, setCommunityModels] = useState<any[]>([])
+  const [quickModelId, setQuickModelId] = useState<number | undefined>()
+  const [quickStockCode, setQuickStockCode] = useState('')
+  const [quickPredicting, setQuickPredicting] = useState(false)
+  const [quickResult, setQuickResult] = useState<any>(null)
+
+  // "用我的模型预测"弹窗
+  const [predictModalVisible, setPredictModalVisible] = useState(false)
+  const [predictTaskId, setPredictTaskId] = useState<number | undefined>()
+  const [predictStockCode, setPredictStockCode] = useState('')
+  const [predicting, setPredicting] = useState(false)
+  const [completedTasks, setCompletedTasks] = useState<TrainingTask[]>([])
+
+  // 自选股：添加自选
+  const [addWatchlistVisible, setAddWatchlistVisible] = useState(false)
+  const [addWatchlistCode, setAddWatchlistCode] = useState('')
+  const [addWatchlistName, setAddWatchlistName] = useState('')
+  const [addWatchlistLoading, setAddWatchlistLoading] = useState(false)
+  const [watchlistId, setWatchlistId] = useState<number | null>(null)
+
+  // 创建模型抽屉
+  const [createDrawerVisible, setCreateDrawerVisible] = useState(false)
+  const [createForm] = Form.useForm()
+  const [creating, setCreating] = useState(false)
+
+  // 回测结果
+  const [backtestResults, setBacktestResults] = useState<any[]>([])
 
   useEffect(() => {
     const init = async () => {
       setLoading(true)
-      await Promise.all([fetchDashboardData(), fetchMyPredictions(), fetchSignals()])
+      await Promise.all([
+        fetchDashboardData(),
+        fetchMyPredictions(),
+        fetchSignals(),
+        fetchWatchlistQuotes(),
+        fetchCommunityModels(),
+        fetchBacktestResults(),
+      ])
       setLoading(false)
     }
     init()
   }, [])
 
-  // WebSocket实时行情连接
   useEffect(() => {
     marketWs.connect()
     const unsub = marketWs.onMarketData((data) => setLiveQuotes(data))
@@ -75,6 +158,54 @@ const Dashboard: React.FC = () => {
       return () => clearTimeout(timer)
     }
   }, [stats.modelCount, stats.stockCount])
+
+  // SSE：为运行中的训练任务建立实时连接
+  useEffect(() => {
+    const runningTasks = recentTasks.filter(t => t.status === 'running')
+    runningTasks.forEach(task => {
+      if (!sseRefs.current[task.id]) connectSSE(task.id)
+    })
+    return () => {
+      Object.values(sseRefs.current).forEach(es => es.close())
+    }
+  }, [recentTasks])
+
+  const connectSSE = (taskId: number) => {
+    if (sseRefs.current[taskId]) return
+    const token = localStorage.getItem('token')
+    const baseUrl = (window as any).__API_BASE_URL__ || ''
+    const url = `${baseUrl}/api/training/tasks/${taskId}/progress-stream?token=${token || ''}`
+    const es = new EventSource(url)
+    sseRefs.current[taskId] = es
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        setProgressMap(prev => ({ ...prev, [taskId]: data }))
+        if (data.status === 'completed' || data.status === 'failed') {
+          es.close()
+          delete sseRefs.current[taskId]
+          fetchDashboardData()
+        }
+      } catch {}
+    }
+    es.onerror = () => { es.close(); delete sseRefs.current[taskId] }
+  }
+
+  const fetchCommunityModels = async () => {
+    try {
+      const res: any = await communityApi.getModels({ page_size: 20 })
+      const items = res?.items || (Array.isArray(res) ? res : [])
+      setCommunityModels(Array.isArray(items) ? items : [])
+    } catch {}
+  }
+
+  const fetchBacktestResults = async () => {
+    try {
+      const res: any = await backtestApi.getResults({ page_size: 5 })
+      const items = res?.items || (Array.isArray(res) ? res : [])
+      setBacktestResults(Array.isArray(items) ? items : [])
+    } catch {}
+  }
 
   const fetchMyPredictions = async () => {
     try {
@@ -89,6 +220,46 @@ const Dashboard: React.FC = () => {
       const res: any = await signalsApi.getSignals()
       setSignals(res?.signals || [])
     } catch {}
+  }
+
+  const fetchWatchlistQuotes = async () => {
+    setQuotesLoading(true)
+    try {
+      const data: any = await watchlistApi.getWatchlists()
+      const lists = data?.items || (Array.isArray(data) ? data : [])
+      if (lists.length === 0) { setWatchlistQuotes([]); return }
+      // 记录第一个自选列表的 ID，用于后续添加股票
+      setWatchlistId(lists[0].id || null)
+      const items = lists[0].items || lists[0].stocks || []
+      if (items.length === 0) { setWatchlistQuotes([]); return }
+      const quotes: any[] = []
+      for (const item of items.slice(0, 10)) {
+        try {
+          const quote: any = await dataApi.getRealtimeQuote(item.stock_code)
+          quotes.push({
+            code: item.stock_code,
+            name: item.stock_name || item.stock_code,
+            price: quote?.price || quote?.close,
+            change_pct: quote?.change_pct,
+            open: quote?.open,
+            high: quote?.high,
+            low: quote?.low,
+          })
+        } catch {
+          quotes.push({
+            code: item.stock_code,
+            name: item.stock_name || item.stock_code,
+            price: null,
+            change_pct: null,
+          })
+        }
+      }
+      setWatchlistQuotes(quotes)
+    } catch {
+      setWatchlistQuotes([])
+    } finally {
+      setQuotesLoading(false)
+    }
   }
 
   const fetchDashboardData = async () => {
@@ -116,8 +287,9 @@ const Dashboard: React.FC = () => {
       completedTaskCount: (tasksData || []).filter((t: TrainingTask) => t.status === 'completed').length,
     })
 
-    setRecentModels(modelsData.slice(0, 5))
-    setRecentTasks(tasksData.slice(0, 5))
+    setRecentModels(modelsData.slice(0, 6))
+    setRecentTasks(tasksData.slice(0, 6))
+    setCompletedTasks(tasksData.filter((t: TrainingTask) => t.status === 'completed'))
 
     try {
       const staleRes: any = await dataApi.checkStaleData()
@@ -139,39 +311,169 @@ const Dashboard: React.FC = () => {
     }
   }
 
+  // 快速预测（社区模型）
+  const handleQuickPredict = async () => {
+    if (!quickModelId) { message.warning('请选择社区模型'); return }
+    if (!quickStockCode.trim()) { message.warning('请输入股票代码'); return }
+    setQuickPredicting(true)
+    setQuickResult(null)
+    try {
+      const res: any = await communityApi.predictWithModel(quickModelId, {
+        stock_code: quickStockCode.trim(),
+      })
+      setQuickResult(res)
+      message.success('预测完成')
+      fetchMyPredictions()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message
+      message.error(detail || '预测失败')
+    } finally {
+      setQuickPredicting(false)
+    }
+  }
+
+  // 用我的模型预测
+  const handlePredictWithMyModel = async () => {
+    if (!predictTaskId) { message.warning('请选择训练任务'); return }
+    if (!predictStockCode.trim()) { message.warning('请输入股票代码'); return }
+    setPredicting(true)
+    try {
+      await predictionApi.predict({
+        task_id: predictTaskId,
+        stock_code: predictStockCode.trim(),
+      })
+      message.success('预测完成')
+      setPredictModalVisible(false)
+      setPredictTaskId(undefined)
+      setPredictStockCode('')
+      fetchMyPredictions()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message
+      message.error(detail || '预测失败')
+    } finally {
+      setPredicting(false)
+    }
+  }
+
+  // 添加自选股
+  const handleAddWatchlist = async () => {
+    if (!addWatchlistCode.trim()) { message.warning('请输入股票代码'); return }
+    if (!watchlistId) { message.warning('未找到自选列表'); return }
+    setAddWatchlistLoading(true)
+    try {
+      await watchlistApi.addStock(watchlistId, {
+        stock_code: addWatchlistCode.trim(),
+        stock_name: addWatchlistName.trim() || addWatchlistCode.trim(),
+      })
+      message.success('添加成功')
+      setAddWatchlistVisible(false)
+      setAddWatchlistCode('')
+      setAddWatchlistName('')
+      fetchWatchlistQuotes()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message
+      message.error(detail || '添加失败')
+    } finally {
+      setAddWatchlistLoading(false)
+    }
+  }
+
+  // 创建模型
+  const handleCreateModel = async () => {
+    try {
+      const values = await createForm.validateFields()
+      setCreating(true)
+      const stockCodes = values.stock_codes
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter(Boolean)
+      const modelData: any = await modelApi.createModel({
+        name: values.name,
+        config: {
+          model_type: values.model_type,
+          features: ['close', 'volume', 'ma_5', 'ma_10', 'ma_20', 'rsi_14', 'macd'],
+          target: values.target,
+          stock_codes: stockCodes,
+        },
+      })
+      message.success('模型创建成功，正在启动训练...')
+      setCreateDrawerVisible(false)
+      createForm.resetFields()
+      // 自动创建训练任务
+      try {
+        await trainingApi.createTask({ model_id: modelData.id })
+        message.success('训练任务已创建')
+      } catch {
+        message.warning('训练任务创建失败，请手动启动训练')
+      }
+      fetchDashboardData()
+    } catch (err: any) {
+      if (err?.errorFields) return
+      const detail = err?.response?.data?.detail || err?.message
+      message.error(detail || '创建模型失败')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  // 训练任务：启动训练
+  const handleTrainModel = async (modelId: number) => {
+    try {
+      await trainingApi.createTask({ model_id: modelId })
+      message.success('训练任务已创建')
+      fetchDashboardData()
+    } catch {
+      message.error('创建训练任务失败')
+    }
+  }
+
+  // 训练任务：重试失败任务
+  const handleRetryTask = async (task: TrainingTask) => {
+    try {
+      await trainingApi.createTask({ model_id: task.model_id })
+      message.success('已重新创建训练任务')
+      fetchDashboardData()
+    } catch {
+      message.error('重试失败')
+    }
+  }
+
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {
-      draft: 'default',
-      trained: 'success',
-      deployed: 'processing',
-      pending: 'default',
-      running: 'processing',
-      completed: 'success',
-      failed: 'error',
-      cancelled: 'warning',
+      draft: 'default', trained: 'success', deployed: 'processing',
+      pending: 'default', running: 'processing', completed: 'success',
+      failed: 'error', cancelled: 'warning',
     }
     return colors[status] || 'default'
   }
 
   const getStatusText = (status: string) => {
     const texts: Record<string, string> = {
-      draft: '草稿',
-      trained: '已训练',
-      deployed: '已部署',
-      pending: '待执行',
-      running: '运行中',
-      completed: '已完成',
-      failed: '失败',
-      cancelled: '已取消',
+      draft: '草稿', trained: '已训练', deployed: '已部署',
+      pending: '待执行', running: '运行中', completed: '已完成',
+      failed: '失败', cancelled: '已取消',
     }
     return texts[status] || status
   }
 
-  // 预测方向信息映射，用于"我的预测结果"展示
   const getDirectionInfo = (direction: string) => {
     if (direction === 'up' || direction === '看涨') return { label: '看涨', color: 'red', icon: <RiseOutlined /> }
     if (direction === 'down' || direction === '看跌') return { label: '看跌', color: 'green', icon: <FallOutlined /> }
     return { label: '震荡', color: 'default', icon: <MinusOutlined /> }
+  }
+
+  const getElapsedTime = (task: TrainingTask) => {
+    if (!task.start_time) return 0
+    const start = new Date(task.start_time).getTime()
+    const end = task.end_time ? new Date(task.end_time).getTime() : Date.now()
+    return (end - start) / 1000
+  }
+
+  const getEstimatedRemaining = (progress: number, elapsedSeconds: number) => {
+    if (progress <= 0 || progress >= 100) return null
+    const estimatedTotal = elapsedSeconds / (progress / 100)
+    const remaining = estimatedTotal - elapsedSeconds
+    return Math.max(0, remaining)
   }
 
   const currentStep = (() => {
@@ -183,7 +485,7 @@ const Dashboard: React.FC = () => {
   })()
 
   const stepActions: Record<number, { path: string; text: string }> = {
-    0: { path: '/data', text: '获取股票数据' },
+    0: { path: '/community', text: '用社区模型快速预测' },
     1: { path: '/models/build', text: '创建模型' },
     2: { path: '/train-predict', text: '训练模型' },
     3: { path: '/train-predict', text: '执行回测' },
@@ -220,7 +522,7 @@ const Dashboard: React.FC = () => {
 
   return (
     <div>
-      {/* 标题区 */}
+      {/* 1. 标题区 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <MascotBull mood="chill" size="small" />
@@ -236,7 +538,7 @@ const Dashboard: React.FC = () => {
         管理你的模型、查看预测结果、追踪训练进度
       </p>
 
-      {/* 数据过期警告 */}
+      {/* 2. 数据过期警告 */}
       {staleModels.length > 0 && (
         <Alert
           style={{ marginBottom: 20 }}
@@ -270,7 +572,7 @@ const Dashboard: React.FC = () => {
         />
       )}
 
-      {/* 统计卡片 */}
+      {/* 3. 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         <Col xs={24} sm={12} lg={6}>
           <Card hoverable onClick={() => navigate('/data')} size="small">
@@ -314,9 +616,526 @@ const Dashboard: React.FC = () => {
         </Col>
       </Row>
 
-      {/* 实时行情 */}
+      {/* 4. 快速预测区域（社区模型） */}
+      <Card
+        title="🔮 快速预测"
+        size="small"
+        style={{ marginBottom: 20 }}
+        extra={<Button type="link" size="small" onClick={() => navigate('/community')}>浏览更多模型</Button>}
+      >
+        <Alert
+          message="无需自己训练模型，选择社区模型即可快速预测"
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+        <Row gutter={[12, 12]} align="middle">
+          <Col xs={24} sm={8} md={8}>
+            <Select
+              placeholder="选择社区模型"
+              value={quickModelId}
+              onChange={setQuickModelId}
+              style={{ width: '100%' }}
+              showSearch
+              optionFilterProp="label"
+              options={communityModels.map((m: any) => ({
+                value: m.id,
+                label: `${m.name} (${m.model_type?.toUpperCase() || '未知'})`,
+              }))}
+            />
+          </Col>
+          <Col xs={24} sm={8} md={8}>
+            <Input
+              placeholder="输入股票代码，如 000001"
+              value={quickStockCode}
+              onChange={e => setQuickStockCode(e.target.value)}
+              onPressEnter={handleQuickPredict}
+            />
+          </Col>
+          <Col xs={24} sm={8} md={8}>
+            <Button
+              type="primary"
+              size="large"
+              icon={<ThunderboltOutlined />}
+              loading={quickPredicting}
+              onClick={handleQuickPredict}
+              block
+            >
+              立即预测
+            </Button>
+          </Col>
+        </Row>
+        {quickResult && (
+          <Card
+            size="small"
+            style={{ marginTop: 16, borderLeft: '3px solid #722ed1' }}
+          >
+            <Row gutter={[16, 8]}>
+              <Col xs={12} sm={6}>
+                <Statistic title="股票" value={quickResult.stock_code || quickStockCode} valueStyle={{ fontSize: 16 }} />
+              </Col>
+              {quickResult.direction && (
+                <Col xs={12} sm={6}>
+                  <Statistic
+                    title="预测方向"
+                    value={getDirectionInfo(quickResult.direction).label}
+                    valueStyle={{
+                      fontSize: 16,
+                      color: quickResult.direction === 'up' || quickResult.direction === '看涨' ? '#f5222d'
+                        : quickResult.direction === 'down' || quickResult.direction === '看跌' ? '#52c41a' : '#999',
+                    }}
+                  />
+                </Col>
+              )}
+              {quickResult.prediction_value != null && (
+                <Col xs={12} sm={6}>
+                  <Statistic title="预测值" value={quickResult.prediction_value.toFixed(2)} valueStyle={{ fontSize: 16 }} />
+                </Col>
+              )}
+              {quickResult.confidence != null && (
+                <Col xs={12} sm={6}>
+                  <Statistic title="置信度" value={`${Math.round(quickResult.confidence * 100)}%`} valueStyle={{ fontSize: 16 }} />
+                </Col>
+              )}
+            </Row>
+          </Card>
+        )}
+      </Card>
+
+      {/* 5. 最新预测结果（增强） */}
+      <Card
+        title="🎯 最新预测结果"
+        size="small"
+        style={{ marginBottom: 20 }}
+        extra={
+          <Space>
+            <Button
+              type="primary"
+              size="small"
+              icon={<ThunderboltOutlined />}
+              onClick={() => setPredictModalVisible(true)}
+            >
+              用我的模型预测
+            </Button>
+            {myPredictions.length > 6 && (
+              <Button type="link" size="small" onClick={() => navigate('/train-predict')}>查看全部</Button>
+            )}
+          </Space>
+        }
+      >
+        {/* 自动清空开关 */}
+        <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, color: '#666' }}>每日自动清空预测结果</span>
+          <Switch
+            checked={user?.auto_clear_predictions_daily !== false}
+            onChange={async (checked) => {
+              try {
+                await authApi.updateSettings({ auto_clear_predictions_daily: checked })
+                setUser({ ...user!, auto_clear_predictions_daily: checked })
+                message.success(checked ? '已开启每日自动清空' : '已关闭每日自动清空')
+              } catch {
+                message.error('更新设置失败')
+              }
+            }}
+          />
+        </div>
+
+        {myPredictions.length > 0 ? (
+          <Row gutter={[16, 16]}>
+            {myPredictions.slice(0, 6).map((pred) => {
+              const dirInfo = getDirectionInfo(pred.direction || 'flat')
+              const isUp = pred.direction === 'up' || pred.direction === '看涨'
+              const isDown = pred.direction === 'down' || pred.direction === '看跌'
+              const borderColor = isUp ? '#f5222d' : isDown ? '#52c41a' : '#faad14'
+              return (
+                <Col xs={24} sm={12} md={8} key={pred.id}>
+                  <Card size="small" hoverable style={{ borderLeft: `3px solid ${borderColor}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{pred.stock_name || pred.stock_code}</div>
+                        <div style={{ color: '#999', fontSize: 12 }}>{pred.stock_code}</div>
+                      </div>
+                      <Tag color={dirInfo.color} style={{ fontSize: 13 }}>
+                        {dirInfo.icon} {dirInfo.label}
+                      </Tag>
+                    </div>
+                    {pred.prediction_value != null && (
+                      <div style={{ marginTop: 8, fontSize: 18, fontWeight: 700, color: borderColor }}>
+                        ¥{pred.prediction_value.toFixed(2)}
+                      </div>
+                    )}
+                    {pred.predicted_change_pct != null && (
+                      <div style={{ fontSize: 12, color: isUp ? '#f5222d' : isDown ? '#52c41a' : '#999' }}>
+                        预测涨跌: {pred.predicted_change_pct > 0 ? '+' : ''}{pred.predicted_change_pct.toFixed(2)}%
+                      </div>
+                    )}
+                    {pred.confidence != null && (
+                      <Progress
+                        percent={Math.round(pred.confidence * 100)}
+                        size="small"
+                        strokeColor={pred.confidence > 0.6 ? '#52c41a' : '#faad14'}
+                        format={(pct) => `置信度 ${pct}%`}
+                        style={{ marginTop: 8 }}
+                      />
+                    )}
+                    <div style={{ fontSize: 11, color: '#bbb', marginTop: 4 }}>
+                      {pred.model_name || '未知模型'} · {pred.created_at?.slice(0, 16).replace('T', ' ')}
+                    </div>
+                  </Card>
+                </Col>
+              )
+            })}
+          </Row>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '24px 0', color: '#999' }}>
+            <ThunderboltOutlined style={{ fontSize: 28, marginBottom: 8, display: 'block' }} />
+            暂无预测结果，使用上方快速预测或训练模型后即可预测
+          </div>
+        )}
+      </Card>
+
+      {/* 6. 自选股行情（增强） */}
+      <Card
+        title="📋 自选股行情"
+        size="small"
+        style={{ marginBottom: 20 }}
+        extra={
+          <Space>
+            <Button type="link" size="small" onClick={() => navigate('/watchlist')}>管理自选</Button>
+          </Space>
+        }
+      >
+        {quotesLoading ? (
+          <div style={{ textAlign: 'center', padding: '24px 0' }}>
+            <Spin tip="加载行情中..." />
+          </div>
+        ) : watchlistQuotes.length > 0 ? (
+          <>
+            <Row gutter={[12, 12]}>
+              {watchlistQuotes.map((q) => {
+                const isUp = q.change_pct != null && q.change_pct > 0
+                const isDown = q.change_pct != null && q.change_pct < 0
+                const priceColor = isUp ? '#f5222d' : isDown ? '#52c41a' : '#333'
+                return (
+                  <Col xs={12} sm={8} md={6} lg={4} key={q.code}>
+                    <div style={{
+                      padding: '10px 12px',
+                      background: isUp ? '#fff1f0' : isDown ? '#f6ffed' : '#fafafa',
+                      borderRadius: 8,
+                      borderLeft: `3px solid ${isUp ? '#f5222d' : isDown ? '#52c41a' : '#d9d9d9'}`,
+                      position: 'relative',
+                    }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{q.name}</div>
+                      <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>{q.code}</div>
+                      {q.price != null ? (
+                        <>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: priceColor }}>
+                            ¥{typeof q.price === 'number' ? q.price.toFixed(2) : q.price}
+                          </div>
+                          {q.change_pct != null && (
+                            <div style={{ fontSize: 12, color: priceColor }}>
+                              {isUp ? '+' : ''}{q.change_pct.toFixed(2)}%
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div style={{ fontSize: 12, color: '#999' }}>行情暂不可用</div>
+                      )}
+                      {/* 预测快捷按钮 */}
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={<ThunderboltOutlined />}
+                        style={{ position: 'absolute', top: 4, right: 4, padding: '0 4px', fontSize: 12 }}
+                        onClick={() => {
+                          setQuickStockCode(q.code)
+                          window.scrollTo({ top: 0, behavior: 'smooth' })
+                        }}
+                      >
+                        预测
+                      </Button>
+                    </div>
+                  </Col>
+                )
+              })}
+            </Row>
+            <div style={{ textAlign: 'center', marginTop: 12 }}>
+              <Button
+                type="dashed"
+                icon={<PlusOutlined />}
+                onClick={() => setAddWatchlistVisible(true)}
+              >
+                添加自选股
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '24px 0', color: '#999' }}>
+            <LineChartOutlined style={{ fontSize: 28, marginBottom: 8, display: 'block' }} />
+            暂无自选股
+            <div style={{ marginTop: 8 }}>
+              <Button type="dashed" icon={<PlusOutlined />} onClick={() => setAddWatchlistVisible(true)}>
+                添加自选股
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* 7. 我的模型（增强卡片展示） */}
+      <Card
+        title="🤖 我的模型"
+        size="small"
+        style={{ marginBottom: 20 }}
+        extra={
+          <Space>
+            <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setCreateDrawerVisible(true)}>
+              创建新模型
+            </Button>
+            <Button type="link" size="small" onClick={() => navigate('/models')}>查看全部</Button>
+          </Space>
+        }
+      >
+        {recentModels.length > 0 ? (
+          <Row gutter={[16, 16]}>
+            {recentModels.map((model) => (
+              <Col xs={24} sm={12} md={8} key={model.id}>
+                <Card
+                  size="small"
+                  hoverable
+                  style={{
+                    borderLeft: `3px solid ${model.status === 'trained' ? '#52c41a' : model.status === 'draft' ? '#d9d9d9' : '#1890ff'}`,
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 8 }}>{model.name}</div>
+                  <div style={{ marginBottom: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    <Tag color="blue">{model.model_type?.toUpperCase()}</Tag>
+                    <Tag color={getStatusColor(model.status)}>{getStatusText(model.status)}</Tag>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
+                    训练股票: {model.stock_codes?.length || 0} 只
+                  </div>
+                  <div style={{ fontSize: 12, color: '#999', marginBottom: 12 }}>
+                    特征数: {model.features?.length || 0} 个
+                  </div>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {model.status === 'draft' && (
+                      <>
+                        <Button size="small" type="primary" onClick={() => handleTrainModel(model.id)}>训练</Button>
+                        <Button size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>
+                      </>
+                    )}
+                    {model.status === 'trained' && (
+                      <>
+                        <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
+                        <Button size="small" onClick={() => navigate('/train-predict?tab=backtest')}>回测</Button>
+                        <Button size="small" onClick={() => handleTrainModel(model.id)}>重新训练</Button>
+                      </>
+                    )}
+                    {model.status === 'deployed' && (
+                      <>
+                        <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
+                        <Button size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>
+                      </>
+                    )}
+                  </div>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '24px 0', color: '#999' }}>
+            <RobotOutlined style={{ fontSize: 28, marginBottom: 8, display: 'block' }} />
+            暂无模型，点击"创建新模型"开始
+          </div>
+        )}
+      </Card>
+
+      {/* 8. 训练任务（增强卡片展示 + SSE 实时进度） */}
+      <Card
+        title="🏋️ 训练任务"
+        size="small"
+        style={{ marginBottom: 20 }}
+        extra={<Button type="link" size="small" onClick={() => navigate('/train-predict')}>查看全部</Button>}
+      >
+        {recentTasks.length > 0 ? (
+          <Row gutter={[16, 16]}>
+            {recentTasks.map((task) => {
+              const progress = progressMap[task.id]
+              const model = recentModels.find(m => m.id === task.model_id)
+              const isRunning = task.status === 'running'
+
+              return (
+                <Col xs={24} sm={12} md={8} key={task.id}>
+                  <Card
+                    size="small"
+                    style={{
+                      borderLeft: `3px solid ${task.status === 'completed' ? '#52c41a' : task.status === 'running' ? '#1890ff' : task.status === 'failed' ? '#f5222d' : '#d9d9d9'}`,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+                      {model?.name || `模型 #${task.model_id}`}
+                    </div>
+                    <Tag color={getStatusColor(task.status)} style={{ marginBottom: 8 }}>
+                      {isRunning && <LoadingOutlined spin style={{ marginRight: 4 }} />}
+                      {getStatusText(task.status)}
+                    </Tag>
+
+                    {/* 运行中：显示实时进度 */}
+                    {isRunning && progress && (
+                      <div style={{ marginTop: 8, padding: '8px 12px', background: '#f6f8fa', borderRadius: 6 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                          <span style={{ fontSize: 12, fontWeight: 500, color: '#1890ff' }}>
+                            {stageMap[progress.stage] || '处理中'}
+                          </span>
+                          <span style={{ fontSize: 12, color: '#666' }}>
+                            ⏱ 已用 {formatDuration(progress.elapsed_seconds || getElapsedTime(task))}
+                            {(() => {
+                              const remaining = getEstimatedRemaining(
+                                progress.progress || 0,
+                                progress.elapsed_seconds || getElapsedTime(task),
+                              )
+                              return remaining !== null && remaining > 0 ? (
+                                <> · 预计剩余 <span style={{ color: '#f5222d', fontWeight: 500 }}>{formatDuration(remaining)}</span></>
+                              ) : null
+                            })()}
+                          </span>
+                        </div>
+                        <Progress
+                          percent={Math.round(progress.progress || 0)}
+                          size="small"
+                          status="active"
+                        />
+                        {progress.epoch != null && (
+                          <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+                            Epoch: {progress.epoch}
+                            {progress.train_loss != null && ` · 训练损失: ${progress.train_loss.toFixed(4)}`}
+                            {progress.val_loss != null && ` · 验证损失: ${progress.val_loss.toFixed(4)}`}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 运行中但尚无 SSE 数据 */}
+                    {isRunning && !progress && (
+                      <div style={{ marginTop: 8, padding: '8px 12px', background: '#f6f8fa', borderRadius: 6 }}>
+                        <Progress percent={0} size="small" status="active" />
+                        <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>等待训练进度...</div>
+                      </div>
+                    )}
+
+                    {/* 已完成：显示训练指标 */}
+                    {task.status === 'completed' && task.metrics && (
+                      <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {Object.entries(task.metrics).slice(0, 3).map(([key, value]: [string, any]) => {
+                          if (typeof value !== 'number') return null
+                          return (
+                            <Tag key={key} style={{ fontSize: 11 }}>
+                              {key.toUpperCase()}: {value.toFixed(4)}
+                            </Tag>
+                          )
+                        })}
+                      </div>
+                    )}
+
+                    {/* 失败：显示错误信息 */}
+                    {task.status === 'failed' && task.error_message && (
+                      <div style={{ marginTop: 8, padding: '6px 10px', background: '#fff1f0', borderRadius: 4, fontSize: 12, color: '#f5222d' }}>
+                        {task.error_message.length > 80 ? task.error_message.slice(0, 80) + '...' : task.error_message}
+                      </div>
+                    )}
+
+                    <div style={{ fontSize: 11, color: '#bbb', marginTop: 8 }}>
+                      {task.start_time && new Date(task.start_time).toLocaleString()}
+                      {task.duration != null && ` · ${formatDuration(task.duration)}`}
+                    </div>
+
+                    {/* 操作按钮 */}
+                    <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                      {task.status === 'completed' && (
+                        <>
+                          <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
+                          <Button size="small" onClick={() => navigate('/train-predict?tab=backtest')}>回测</Button>
+                        </>
+                      )}
+                      {task.status === 'failed' && (
+                        <Button size="small" type="primary" danger onClick={() => handleRetryTask(task)}>重试</Button>
+                      )}
+                      <Button size="small" onClick={() => navigate('/train-predict')}>详情</Button>
+                    </div>
+                  </Card>
+                </Col>
+              )
+            })}
+          </Row>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '24px 0', color: '#999' }}>
+            <PlayCircleOutlined style={{ fontSize: 28, marginBottom: 8, display: 'block' }} />
+            暂无训练任务
+          </div>
+        )}
+      </Card>
+
+      {/* 9. 回测结果（新增） */}
+      {backtestResults.length > 0 && (
+        <Card
+          title="📈 回测结果"
+          size="small"
+          style={{ marginBottom: 20 }}
+          extra={
+            <Button type="link" size="small" onClick={() => navigate('/train-predict?tab=backtest')}>
+              查看详情
+            </Button>
+          }
+        >
+          <Row gutter={[16, 16]}>
+            {backtestResults.slice(0, 4).map((bt: any) => (
+              <Col xs={24} sm={12} md={6} key={bt.id}>
+                <Card size="small" hoverable style={{ borderLeft: '3px solid #722ed1' }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>
+                    回测 #{bt.id}
+                  </div>
+                  <Row gutter={[8, 8]}>
+                    <Col span={8}>
+                      <Statistic
+                        title="总收益率"
+                        value={bt.total_return != null ? (bt.total_return * 100).toFixed(2) : '-'}
+                        suffix="%"
+                        valueStyle={{
+                          fontSize: 14,
+                          color: bt.total_return >= 0 ? '#f5222d' : '#52c41a',
+                        }}
+                      />
+                    </Col>
+                    <Col span={8}>
+                      <Statistic
+                        title="夏普比率"
+                        value={bt.sharpe_ratio != null ? bt.sharpe_ratio.toFixed(2) : '-'}
+                        valueStyle={{ fontSize: 14 }}
+                      />
+                    </Col>
+                    <Col span={8}>
+                      <Statistic
+                        title="最大回撤"
+                        value={bt.max_drawdown != null ? (bt.max_drawdown * 100).toFixed(1) : '-'}
+                        suffix="%"
+                        valueStyle={{ fontSize: 14, color: '#f5222d' }}
+                      />
+                    </Col>
+                  </Row>
+                  <div style={{ fontSize: 11, color: '#bbb', marginTop: 8 }}>
+                    {bt.start_date} ~ {bt.end_date}
+                  </div>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        </Card>
+      )}
+
+      {/* 实时行情（保留） */}
       {liveQuotes.length > 0 && (
-        <Card title="📊 实时行情" size="small" style={{ marginTop: 16, marginBottom: 16 }}>
+        <Card title="📊 实时行情" size="small" style={{ marginBottom: 16 }}>
           <Row gutter={[8, 8]}>
             {liveQuotes.map((q: any) => (
               <Col xs={12} sm={8} md={4} key={q.code}>
@@ -335,9 +1154,9 @@ const Dashboard: React.FC = () => {
         </Card>
       )}
 
-      {/* 交易信号 */}
+      {/* 交易信号（保留） */}
       {signals.length > 0 && (
-        <Card title="🔔 交易信号" size="small" style={{ marginTop: 16, marginBottom: 16 }}>
+        <Card title="🔔 交易信号" size="small" style={{ marginBottom: 16 }}>
           <Row gutter={[8, 8]}>
             {signals.slice(0, 6).map((s: any, i: number) => (
               <Col xs={24} sm={12} md={8} key={i}>
@@ -363,118 +1182,13 @@ const Dashboard: React.FC = () => {
         </Card>
       )}
 
-      {/* 我的预测结果 */}
-      <Divider orientation="left" style={{ fontSize: 15, color: '#666' }}>
-        我的预测结果
-      </Divider>
-
-      <Alert
-        message="预测结果会自动展示在工作台，同一只股票的预测结果会归在一起"
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-      />
-
-      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 13, color: '#666' }}>每日自动清空预测结果</span>
-        <Switch
-          checked={user?.auto_clear_predictions_daily !== false}
-          onChange={async (checked) => {
-            try {
-              await authApi.updateSettings({ auto_clear_predictions_daily: checked })
-              setUser({ ...user!, auto_clear_predictions_daily: checked })
-              message.success(checked ? '已开启每日自动清空' : '已关闭每日自动清空')
-            } catch {
-              message.error('更新设置失败')
-            }
-          }}
-        />
-      </div>
-
-      {myPredictions.length > 0 ? (
-        <Collapse
-          size="small"
-          style={{ marginBottom: 20 }}
-          items={Object.entries(
-            myPredictions.reduce((acc, pred) => {
-              const key = pred.stock_code
-              if (!acc[key]) acc[key] = []
-              acc[key].push(pred)
-              return acc
-            }, {} as Record<string, PredictionShareItem[]>)
-          ).map(([code, preds]) => {
-            const latest = preds[0]
-            const dirInfo = getDirectionInfo(latest.direction || 'flat')
-            return {
-              key: code,
-              label: (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Tag color="blue">{code}</Tag>
-                  <span>{latest.stock_name || code}</span>
-                  <Tag color={dirInfo.color}>{dirInfo.icon} {dirInfo.label}</Tag>
-                  <span style={{ fontSize: 12, color: '#999' }}>
-                    置信度 {Math.round((latest.confidence || 0) * 100)}%
-                  </span>
-                  <span style={{ fontSize: 12, color: '#999' }}>
-                    {latest.created_at?.slice(0, 16).replace('T', ' ')}
-                  </span>
-                </div>
-              ),
-              children: (
-                <List
-                  size="small"
-                  dataSource={preds}
-                  renderItem={(pred) => {
-                    const predDirInfo = getDirectionInfo(pred.direction || 'flat')
-                    return (
-                      <List.Item>
-                        <List.Item.Meta
-                          title={
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <Tag color={predDirInfo.color}>{predDirInfo.icon} {predDirInfo.label}</Tag>
-                              <span style={{ fontSize: 12 }}>
-                                置信度 {Math.round((pred.confidence || 0) * 100)}%
-                              </span>
-                              {pred.prediction_value != null && (
-                                <span style={{ fontSize: 12, color: '#666' }}>
-                                  预测值: {pred.prediction_value.toFixed(2)}
-                                </span>
-                              )}
-                            </div>
-                          }
-                          description={
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ fontSize: 12, color: '#999' }}>
-                                {pred.model_name || '未知模型'}
-                              </span>
-                              <span style={{ fontSize: 12, color: '#999' }}>
-                                {pred.created_at?.slice(0, 16).replace('T', ' ')}
-                              </span>
-                            </div>
-                          }
-                        />
-                      </List.Item>
-                    )
-                  }}
-                />
-              ),
-            }
-          })}
-        />
-      ) : (
-        <div style={{ textAlign: 'center', padding: '32px 0', color: '#999', marginBottom: 20 }}>
-          <ThunderboltOutlined style={{ fontSize: 32, marginBottom: 8, display: 'block' }} />
-          暂无预测结果，完成训练后即可进行预测
-        </div>
-      )}
-
-      {/* 引导式流程进度 */}
+      {/* 10. 引导式流程进度（移到底部） */}
       <Card style={{ marginBottom: 20 }} size="small">
         <Steps
           current={currentStep}
           size="small"
           items={[
-            { title: '获取数据', icon: stats.stockCount > 0 ? <CheckCircleOutlined /> : <DatabaseOutlined /> },
+            { title: '快速预测', icon: stats.stockCount > 0 ? <CheckCircleOutlined /> : <ThunderboltOutlined /> },
             { title: '构建模型', icon: stats.modelCount > 0 ? <CheckCircleOutlined /> : <RobotOutlined /> },
             { title: '训练模型', icon: stats.completedTaskCount > 0 ? <CheckCircleOutlined /> : <PlayCircleOutlined /> },
             { title: '回测验证', icon: stats.backtestCount > 0 ? <CheckCircleOutlined /> : <LineChartOutlined /> },
@@ -492,81 +1206,127 @@ const Dashboard: React.FC = () => {
         </div>
       </Card>
 
-      {/* 最近模型 + 最近任务 */}
-      <Row gutter={[16, 16]} style={{ marginTop: 20 }}>
-        <Col xs={24} lg={12}>
-          <Card
-            title="最近模型"
-            size="small"
-            extra={<Button type="link" size="small" onClick={() => navigate('/models')}>查看全部</Button>}
+      {/* 弹窗：用我的模型预测 */}
+      <Modal
+        title="用我的模型预测"
+        open={predictModalVisible}
+        onCancel={() => { setPredictModalVisible(false); setPredictTaskId(undefined); setPredictStockCode('') }}
+        onOk={handlePredictWithMyModel}
+        okText="开始预测"
+        confirmLoading={predicting}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>选择已完成的训练任务</div>
+          <Select
+            placeholder="请选择训练任务"
+            value={predictTaskId}
+            onChange={setPredictTaskId}
+            style={{ width: '100%' }}
+            options={completedTasks.map(t => {
+              const m = recentModels.find(m => m.id === t.model_id)
+              return {
+                value: t.id,
+                label: `任务#${t.id} - ${m ? `${m.name} (${m.model_type.toUpperCase()})` : `模型#${t.model_id}`}`,
+              }
+            })}
+          />
+        </div>
+        <div>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>输入股票代码</div>
+          <Input
+            placeholder="如 000001"
+            value={predictStockCode}
+            onChange={e => setPredictStockCode(e.target.value)}
+          />
+        </div>
+      </Modal>
+
+      {/* 弹窗：添加自选股 */}
+      <Modal
+        title="添加自选股"
+        open={addWatchlistVisible}
+        onCancel={() => { setAddWatchlistVisible(false); setAddWatchlistCode(''); setAddWatchlistName('') }}
+        onOk={handleAddWatchlist}
+        okText="添加"
+        confirmLoading={addWatchlistLoading}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>股票代码</div>
+          <Input
+            placeholder="如 000001"
+            value={addWatchlistCode}
+            onChange={e => setAddWatchlistCode(e.target.value)}
+          />
+        </div>
+        <div>
+          <div style={{ marginBottom: 8, fontWeight: 500 }}>股票名称（可选）</div>
+          <Input
+            placeholder="如 平安银行"
+            value={addWatchlistName}
+            onChange={e => setAddWatchlistName(e.target.value)}
+          />
+        </div>
+      </Modal>
+
+      {/* 抽屉：创建新模型（简化版表单） */}
+      <Drawer
+        title="创建新模型"
+        open={createDrawerVisible}
+        onClose={() => { setCreateDrawerVisible(false); createForm.resetFields() }}
+        width={420}
+        extra={
+          <Space>
+            <Button onClick={() => { setCreateDrawerVisible(false); createForm.resetFields() }}>取消</Button>
+            <Button type="primary" loading={creating} onClick={handleCreateModel}>创建并训练</Button>
+          </Space>
+        }
+      >
+        <Form
+          form={createForm}
+          layout="vertical"
+          initialValues={{ model_type: 'xgboost', target: 'next_day_direction' }}
+        >
+          <Form.Item
+            name="name"
+            label="模型名称"
+            rules={[{ required: true, message: '请输入模型名称' }]}
           >
-            <List
-              dataSource={recentModels}
-              size="small"
-              renderItem={(model) => (
-                <List.Item
-                  actions={[
-                    model.status === 'trained' ? (
-                      <Button type="link" size="small" onClick={() => navigate('/train-predict')}>预测</Button>
-                    ) : model.status === 'draft' ? (
-                      <Button type="link" size="small" onClick={() => navigate('/train-predict')}>训练</Button>
-                    ) : null,
-                    <Button type="link" size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={model.name}
-                    description={
-                      <div>
-                        <Tag>{model.model_type?.toUpperCase()}</Tag>
-                        <Tag color={getStatusColor(model.status)}>{getStatusText(model.status)}</Tag>
-                      </div>
-                    }
-                  />
-                </List.Item>
-              )}
-              locale={{ emptyText: '暂无模型，点击"创建模型"开始' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card
-            title="最近任务"
-            size="small"
-            extra={<Button type="link" size="small" onClick={() => navigate('/train-predict')}>查看全部</Button>}
+            <Input placeholder="如：我的第一个预测模型" />
+          </Form.Item>
+          <Form.Item
+            name="model_type"
+            label="算法类型"
+            rules={[{ required: true, message: '请选择算法类型' }]}
           >
-            <List
-              dataSource={recentTasks}
-              size="small"
-              renderItem={(task) => (
-                <List.Item
-                  actions={[
-                    task.status === 'completed' ? (
-                      <Button type="link" size="small" onClick={() => navigate('/train-predict')}>预测</Button>
-                    ) : null,
-                    <Button type="link" size="small" onClick={() => navigate('/train-predict')}>详情</Button>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={`任务 #${task.id}`}
-                    description={
-                      <div>
-                        <Tag color={getStatusColor(task.status)}>{getStatusText(task.status)}</Tag>
-                        {task.start_time && (
-                          <span style={{ marginLeft: 8, color: '#999', fontSize: 12 }}>
-                            {new Date(task.start_time).toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                    }
-                  />
-                </List.Item>
-              )}
-              locale={{ emptyText: '暂无训练任务' }}
-            />
-          </Card>
-        </Col>
-      </Row>
+            <Select options={MODEL_TYPE_OPTIONS} />
+          </Form.Item>
+          <Form.Item
+            name="stock_codes"
+            label="训练股票（逗号分隔）"
+            rules={[{ required: true, message: '请输入至少一个股票代码' }]}
+          >
+            <Input placeholder="如：000001,600519,000858" />
+          </Form.Item>
+          <Form.Item
+            name="target"
+            label="预测目标"
+            rules={[{ required: true, message: '请选择预测目标' }]}
+          >
+            <Select options={TARGET_OPTIONS} />
+          </Form.Item>
+        </Form>
+        <Alert
+          message="这是简化版创建表单，仅配置核心参数。如需完整配置（特征选择、参数调优等），请前往模型构建页面。"
+          type="info"
+          showIcon
+          style={{ marginTop: 8 }}
+        />
+        <div style={{ textAlign: 'center', marginTop: 16 }}>
+          <Button type="link" onClick={() => { setCreateDrawerVisible(false); createForm.resetFields(); navigate('/models/build') }}>
+            前往完整配置 →
+          </Button>
+        </div>
+      </Drawer>
 
       <OnboardingGuide
         open={onboardingVisible}

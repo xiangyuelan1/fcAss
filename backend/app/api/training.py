@@ -5,6 +5,7 @@ import json
 import queue
 import threading
 import logging
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
@@ -130,6 +131,23 @@ async def create_training_task(
     ).count()
     if running_count >= 2:
         raise HTTPException(status_code=429, detail="同时最多允许2个训练任务，请等待当前任务完成后再发起新训练")
+
+    # 检查本周训练次数
+    week_start = datetime.now() - timedelta(days=datetime.now().weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    weekly_count = db.query(TrainingTask).join(
+        UserTableModel, TrainingTask.model_id == UserTableModel.id
+    ).filter(
+        UserTableModel.user_id == current_user.id,
+        TrainingTask.created_at >= week_start,
+    ).count()
+
+    WEEKLY_TRAINING_LIMIT = 3
+    if not current_user.is_admin and weekly_count >= WEEKLY_TRAINING_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"每周最多训练{WEEKLY_TRAINING_LIMIT}次，本周已用{weekly_count}次，下周重置"
+        )
 
     service = TrainingService(db)
 
@@ -303,7 +321,7 @@ async def training_progress_stream(
             db_worker = SessionLocal()
             worker_service = TrainingService(db_worker)
 
-            from app.services.training_service import training_progress
+            from app.services.training_service import training_progress, STAGE_LABELS
             import time
 
             last_progress = None
@@ -315,16 +333,23 @@ async def training_progress_stream(
                 current_progress = training_progress.get(task_id, {})
                 if current_progress != last_progress:
                     last_progress = current_progress.copy() if current_progress else None
+                    stage = current_progress.get('stage', task_obj.status)
+                    progress_val = current_progress.get('progress', 0)
+                    elapsed = current_progress.get('elapsed_seconds')
                     q.put(json.dumps({
-                        'stage': current_progress.get('stage', task_obj.status),
-                        'progress': current_progress.get('progress', 0),
+                        'stage': stage,
+                        'progress': progress_val,
                         'epoch': current_progress.get('epoch'),
                         'total_epochs': current_progress.get('total_epochs'),
                         'train_loss': current_progress.get('train_loss'),
                         'val_loss': current_progress.get('val_loss'),
                         'status': task_obj.status,
                         'start_time': current_progress.get('start_time'),
-                        'elapsed_seconds': current_progress.get('elapsed_seconds'),
+                        'elapsed_seconds': elapsed,
+                        'estimated_remaining_seconds': current_progress.get('estimated_remaining_seconds'),
+                        'stage_label': STAGE_LABELS.get(stage, stage),
+                        'current_stock': current_progress.get('current_stock'),
+                        'total_stocks': current_progress.get('total_stocks'),
                     }, ensure_ascii=False))
 
                 if task_obj.status in ['completed', 'failed', 'cancelled']:
@@ -333,12 +358,15 @@ async def training_progress_stream(
                         for k, v in task_obj.metrics.items():
                             if isinstance(v, (int, float)):
                                 metrics[k] = v
+                    final_stage = task_obj.status
                     q.put(json.dumps({
-                        'stage': task_obj.status,
+                        'stage': final_stage,
                         'progress': 100 if task_obj.status == 'completed' else 0,
                         'status': task_obj.status,
                         'error': task_obj.error_message if task_obj.status == 'failed' else None,
                         'metrics': metrics,
+                        'stage_label': STAGE_LABELS.get(final_stage, final_stage),
+                        'estimated_remaining_seconds': 0 if task_obj.status == 'completed' else None,
                     }, ensure_ascii=False))
                     break
 

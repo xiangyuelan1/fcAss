@@ -17,6 +17,8 @@ import {
   InputNumber,
   DatePicker,
   Alert,
+  Progress,
+  Table,
 } from 'antd'
 import {
   HeartOutlined,
@@ -31,6 +33,9 @@ import {
   FundOutlined,
   LinkOutlined,
   LockOutlined,
+  CheckCircleFilled,
+  CloseCircleFilled,
+  TrophyOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { communityApi } from '@/services/api'
@@ -271,6 +276,27 @@ const CommunityModelDetail: React.FC = () => {
                 </span>
               </Space>
             </div>
+            {/* 醒目的一键预测入口 */}
+            <div style={{ marginTop: 16 }}>
+              <Button
+                type="primary"
+                size="large"
+                icon={<ThunderboltOutlined />}
+                onClick={openPredictModal}
+                style={{
+                  background: 'linear-gradient(135deg, #1890ff 0%, #36cfc9 100%)',
+                  border: 'none',
+                  fontWeight: 700,
+                  fontSize: 18,
+                  height: 48,
+                  paddingInline: 32,
+                  borderRadius: 8,
+                  boxShadow: '0 4px 12px rgba(24, 144, 255, 0.35)',
+                }}
+              >
+                🔮 立即预测
+              </Button>
+            </div>
           </Col>
           <Col>
             <Space wrap>
@@ -326,6 +352,135 @@ const CommunityModelDetail: React.FC = () => {
             </Col>
           ))}
         </Row>
+      )}
+
+      {/* 预测战绩 */}
+      {model.prediction_record && model.prediction_record.total_predictions > 0 && (
+        <Card
+          title={
+            <Space>
+              <TrophyOutlined style={{ color: '#faad14' }} />
+              <span>预测战绩</span>
+            </Space>
+          }
+          style={{ marginBottom: 24 }}
+        >
+          <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+            <Col xs={12} sm={6}>
+              <div style={{ textAlign: 'center' }}>
+                <Progress
+                  type="circle"
+                  percent={Math.round((model.prediction_record.accuracy || 0) * 100)}
+                  size={80}
+                  strokeColor={
+                    (model.prediction_record.accuracy || 0) >= 0.7 ? '#52c41a' :
+                    (model.prediction_record.accuracy || 0) >= 0.5 ? '#faad14' : '#f5222d'
+                  }
+                />
+                <div style={{ marginTop: 8, color: '#999', fontSize: 13 }}>准确率</div>
+              </div>
+            </Col>
+            <Col xs={12} sm={6}>
+              <Statistic title="总预测数" value={model.prediction_record.total_predictions} />
+            </Col>
+            <Col xs={12} sm={6}>
+              <Statistic
+                title="正确数"
+                value={model.prediction_record.correct_predictions}
+                valueStyle={{ color: '#52c41a' }}
+              />
+            </Col>
+            <Col xs={12} sm={6}>
+              <Statistic title="当前连胜" value={model.prediction_record.current_streak} suffix={`/ ${model.prediction_record.best_streak} 最佳`} />
+            </Col>
+          </Row>
+
+          {model.prediction_record.badges.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>称号</div>
+              <Space size={[8, 8]} wrap>
+                {model.prediction_record.badges.map((badge) => (
+                  <Tag
+                    key={badge}
+                    color={
+                      badge.includes('预言大师') ? 'gold' :
+                      badge.includes('精准猎手') ? 'green' :
+                      badge.includes('反向指标') ? 'red' :
+                      badge.includes('百战老兵') ? 'purple' :
+                      badge.includes('资深预测') ? 'cyan' :
+                      badge.includes('七日连胜') ? 'volcano' :
+                      badge.includes('五连绝世') ? 'orange' :
+                      'geekblue'
+                    }
+                    style={{ fontSize: 13, padding: '2px 8px' }}
+                  >
+                    {badge}
+                  </Tag>
+                ))}
+              </Space>
+            </div>
+          )}
+
+          {model.prediction_record.daily_records.length > 0 && (
+            <div>
+              <div style={{ marginBottom: 8, color: '#666', fontSize: 13 }}>最近预测记录</div>
+              <Table
+                dataSource={model.prediction_record.daily_records.slice(0, 10)}
+                rowKey={(record) => `${record.date}-${record.stock_code}`}
+                size="small"
+                pagination={false}
+                scroll={{ x: 480 }}
+                columns={[
+                  {
+                    title: '日期',
+                    dataIndex: 'date',
+                    key: 'date',
+                    width: 100,
+                  },
+                  {
+                    title: '股票',
+                    dataIndex: 'stock_code',
+                    key: 'stock_code',
+                    width: 90,
+                  },
+                  {
+                    title: '预测方向',
+                    dataIndex: 'direction',
+                    key: 'direction',
+                    width: 90,
+                    render: (v: string) => (
+                      <Tag color={v === 'up' ? 'red' : v === 'down' ? 'green' : 'default'}>
+                        {v === 'up' ? '看涨' : v === 'down' ? '看跌' : '震荡'}
+                      </Tag>
+                    ),
+                  },
+                  {
+                    title: '实际方向',
+                    dataIndex: 'actual',
+                    key: 'actual',
+                    width: 90,
+                    render: (v: string | null) => v ? (
+                      <Tag color={v === 'up' ? 'red' : v === 'down' ? 'green' : 'default'}>
+                        {v === 'up' ? '看涨' : v === 'down' ? '看跌' : '震荡'}
+                      </Tag>
+                    ) : <span style={{ color: '#bbb' }}>待验证</span>,
+                  },
+                  {
+                    title: '结果',
+                    dataIndex: 'correct',
+                    key: 'correct',
+                    width: 70,
+                    render: (v: boolean | null) => {
+                      if (v === true) return <CheckCircleFilled style={{ color: '#52c41a', fontSize: 16 }} />
+                      if (v === false) return <CloseCircleFilled style={{ color: '#f5222d', fontSize: 16 }} />
+                      return <span style={{ color: '#bbb' }}>-</span>
+                    },
+                  },
+                ]}
+              />
+            </div>
+          )}
+        </Card>
       )}
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>

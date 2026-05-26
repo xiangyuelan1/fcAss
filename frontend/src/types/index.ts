@@ -228,6 +228,30 @@ export interface SystemConfigItem {
   updated_at: string | null;
 }
 
+export interface PredictionDailyRecord {
+  date: string;
+  stock_code: string;
+  direction: string;
+  actual?: string | null;
+  correct?: boolean | null;
+}
+
+export interface PredictionRecord {
+  total_predictions: number;
+  correct_predictions: number;
+  accuracy: number;
+  current_streak: number;
+  best_streak: number;
+  badges: string[];
+  daily_records: PredictionDailyRecord[];
+}
+
+export interface PredictionSummary {
+  accuracy: number;
+  current_streak: number;
+  badges: string[];
+}
+
 export interface CommunityModel {
   id: number;
   user_id: number;
@@ -243,6 +267,9 @@ export interface CommunityModel {
   stock_codes: string[];
   train_date_range?: { start?: string; end?: string };
   metrics?: Record<string, number>;
+  auto_predict?: boolean;
+  prediction_record?: PredictionRecord;
+  prediction_summary?: PredictionSummary;
   likes_count: number;
   clones_count: number;
   is_active: boolean;

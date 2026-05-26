@@ -72,6 +72,8 @@ _MIGRATION_COLUMNS = {
         ("target_config", "JSON"),
         ("train_date_range", "JSON"),
         ("visibility", "VARCHAR(20) DEFAULT 'public'"),
+        ("auto_predict", "BOOLEAN DEFAULT 1"),
+        ("prediction_record", "JSON"),
     ],
     "payment_config": [
         ("register_fee", "DECIMAL(10,2) DEFAULT 1.00"),

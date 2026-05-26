@@ -23,6 +23,8 @@ class CommunityModel(Base):
     metrics = Column(JSON)
     is_active = Column(Boolean, default=True)
     visibility = Column(String(20), default="public")
+    auto_predict = Column(Boolean, default=True, comment="是否每日自动预测")
+    prediction_record = Column(JSON, default=dict, comment="预测战绩记录")
     likes_count = Column(Integer, default=0)
     clones_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)
@@ -49,6 +51,8 @@ class CommunityModel(Base):
             "metrics": self.metrics,
             "is_active": self.is_active,
             "visibility": self.visibility or "public",
+            "auto_predict": self.auto_predict if self.auto_predict is not None else True,
+            "prediction_record": self.prediction_record or {},
             "likes_count": self.likes_count,
             "clones_count": self.clones_count,
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,

@@ -13,7 +13,7 @@ from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
 from app.services.feature_service import FeatureService
 from app.services.data_service import DataService
 from app.services.backtest_service import BacktestService
-from app.api.prediction import _do_predict, _prediction_to_label
+from app.api.prediction import _do_predict, _prediction_to_label, _ensure_stock_data
 from sqlalchemy import func, desc
 
 router = APIRouter()
@@ -191,6 +191,13 @@ async def get_community_models(
             "id": author.id,
             "username": author.username,
         } if author else None
+        # 提取战绩摘要
+        pr = m.prediction_record or {}
+        d["prediction_summary"] = {
+            "accuracy": pr.get("accuracy", 0),
+            "current_streak": pr.get("current_streak", 0),
+            "badges": pr.get("badges", []),
+        }
         result.append(d)
 
     return {
@@ -225,6 +232,17 @@ async def get_community_model_detail(
         "id": author.id,
         "username": author.username,
     } if author else None
+    # 完整战绩记录（详情页展示）
+    pr = community_model.prediction_record or {}
+    d["prediction_record"] = {
+        "total_predictions": pr.get("total_predictions", 0),
+        "correct_predictions": pr.get("correct_predictions", 0),
+        "accuracy": pr.get("accuracy", 0),
+        "current_streak": pr.get("current_streak", 0),
+        "best_streak": pr.get("best_streak", 0),
+        "badges": pr.get("badges", []),
+        "daily_records": pr.get("daily_records", []),
+    }
     return d
 
 
@@ -493,27 +511,11 @@ async def predict_with_community_model(
     feature_service = FeatureService(db)
     data_service = DataService(db)
 
-    # 确保股票数据存在
-    stock_info = data_service.get_stock_by_code(request.stock_code)
-    if not stock_info:
-        try:
-            result = data_service.fetch_stock_data(request.stock_code)
-            if result['price_count'] == 0:
-                raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 数据获取失败")
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 数据获取失败: {str(e)}")
-
-    # 计算特征
-    df = feature_service.calculate_features(
-        stock_code=request.stock_code,
-        indicators=community_model.features,
-        indicator_params=community_model.feature_config or {},
-        limit=5000,
+    # 确保股票有足够数据（自动获取和补充），并计算特征
+    df = _ensure_stock_data(
+        data_service, feature_service, request.stock_code,
+        community_model.features, community_model.feature_config or {},
     )
-    if df is None or df.empty:
-        raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 无可用数据")
 
     exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
                     'change_pct', 'change_amount', 'adj_close'}

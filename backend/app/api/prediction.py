@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
+import time
 
 from app.core.database import get_db
 from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
@@ -17,6 +18,91 @@ from app.auth import get_current_active_user
 from app.models.user import User as UserModel
 
 router = APIRouter()
+
+
+def _ensure_stock_data(
+    data_service: DataService,
+    feature_service: FeatureService,
+    stock_code: str,
+    indicators: list,
+    indicator_params: dict,
+    feature_limit: int = 5000,
+) -> "pd.DataFrame":
+    """确保股票有足够的数据用于预测，自动获取和补充数据
+
+    策略：
+    1. 股票记录不存在 → fetch_stock_data 获取基础信息和历史价格
+    2. 计算特征，若结果为空 → sync_stock_prices 补充最新价格后重试
+    3. 仍为空 → fetch_stock_data 全量重新获取后重试
+    4. 所有尝试均失败则抛出 HTTPException
+
+    Returns:
+        计算特征后的 DataFrame（保证非空）
+    """
+    stock_info = data_service.get_stock_by_code(stock_code)
+
+    # 阶段1：股票记录不存在，先获取基础数据
+    if not stock_info:
+        try:
+            result = data_service.fetch_stock_data(stock_code)
+            if result.get('price_count', 0) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"股票 {stock_code} 数据获取失败，请检查代码是否正确",
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"股票 {stock_code} 数据获取失败: {str(e)}",
+            )
+
+    # 阶段2：尝试计算特征
+    df = feature_service.calculate_features(
+        stock_code=stock_code,
+        indicators=indicators,
+        indicator_params=indicator_params,
+        limit=feature_limit,
+    )
+    if df is not None and not df.empty:
+        return df
+
+    # 阶段3：特征为空，说明价格数据不足以计算指标，尝试同步最新价格
+    try:
+        data_service.sync_stock_prices(stock_code)
+        time.sleep(2)
+    except Exception:
+        pass
+
+    df = feature_service.calculate_features(
+        stock_code=stock_code,
+        indicators=indicators,
+        indicator_params=indicator_params,
+        limit=feature_limit,
+    )
+    if df is not None and not df.empty:
+        return df
+
+    # 阶段4：仍为空，全量重新获取
+    try:
+        data_service.fetch_stock_data(stock_code)
+    except Exception:
+        pass
+
+    df = feature_service.calculate_features(
+        stock_code=stock_code,
+        indicators=indicators,
+        indicator_params=indicator_params,
+        limit=feature_limit,
+    )
+    if df is not None and not df.empty:
+        return df
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"股票 {stock_code} 数据不足，已尝试自动获取。该股票可能为新上市或数据源暂不可用，请稍后重试或换一只股票",
+    )
 
 
 def _verify_task_ownership(task: TrainingTask, current_user: UserModel):
@@ -100,26 +186,11 @@ async def predict(
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # 检查该股票是否有数据，没有则自动获取
-    stock_info = data_service.get_stock_by_code(request.stock_code)
-    if not stock_info:
-        try:
-            result = data_service.fetch_stock_data(request.stock_code)
-            if result['price_count'] == 0:
-                raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 数据获取失败，请检查代码是否正确")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 数据获取失败: {str(e)}")
-
-    # 获取最新数据并计算特征
-    df = feature_service.calculate_features(
-        stock_code=request.stock_code,
-        indicators=user_model.features,
-        indicator_params=user_model.feature_config or {},
-        limit=5000
+    # 确保股票有足够数据（自动获取和补充），并计算特征
+    df = _ensure_stock_data(
+        data_service, feature_service, request.stock_code,
+        user_model.features, user_model.feature_config or {},
     )
-
-    if df is None or df.empty:
-        raise HTTPException(status_code=400, detail=f"股票 {request.stock_code} 无可用数据，请先在数据管理中获取")
 
     feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
                             'change_pct', 'change_amount', 'adj_close'}]
@@ -302,15 +373,10 @@ async def batch_predict(
     results = []
     for code in request.stock_codes:
         try:
-            df = feature_service.calculate_features(
-                stock_code=code,
-                indicators=user_model.features,
-                indicator_params=user_model.feature_config or {},
-                limit=5000
+            df = _ensure_stock_data(
+                data_service, feature_service, code,
+                user_model.features, user_model.feature_config or {},
             )
-            if df is None or df.empty:
-                results.append({'stock_code': code, 'error': '无可用数据'})
-                continue
 
             feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
                             'change_pct', 'change_amount', 'adj_close'}]

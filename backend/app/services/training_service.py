@@ -30,6 +30,26 @@ from app.core.config import settings
 
 training_progress = {}
 
+STAGE_LABELS = {
+    'data_preparation': '数据准备',
+    'training': '模型训练',
+    'validating': '验证中',
+    'completed': '完成',
+    'failed': '失败',
+    'cancelled': '已取消',
+}
+
+
+def estimate_remaining_seconds(elapsed_seconds: float, progress: float):
+    """根据已用时间和当前进度百分比估算剩余时间
+
+    算法: remaining = elapsed * (1 - p) / p，当 progress > 5 时才计算，
+    否则返回 None（进度太低时估算无意义）。
+    """
+    if progress > 5 and elapsed_seconds > 0:
+        return elapsed_seconds * (1 - progress / 100) / (progress / 100)
+    return None
+
 
 def create_pytorch_model(model_type: str, input_size: int, config: Dict[str, Any]):
     """根据模型类型和配置创建PyTorch模型"""
@@ -404,6 +424,8 @@ class TrainingService:
                 'progress': 0,
                 'start_time': training_start_time,
                 'data_preparation_progress': 0,
+                'elapsed_seconds': 0,
+                'estimated_remaining_seconds': None,
             }
             self._log(task_id, "阶段1: 数据准备中...")
             
@@ -419,6 +441,7 @@ class TrainingService:
                 'progress': 0,
                 'start_time': training_start_time,
                 'elapsed_seconds': time.time() - training_start_time,
+                'estimated_remaining_seconds': None,
             }
             self._log(task_id, "阶段2: 模型训练中...")
             
@@ -469,6 +492,7 @@ class TrainingService:
                 'progress': 100,
                 'start_time': training_start_time,
                 'elapsed_seconds': time.time() - training_start_time,
+                'estimated_remaining_seconds': 0,
             }
             self._log(task_id, f"训练完成! 指标: {', '.join(f'{k}={v:.6f}' for k, v in metrics.items() if isinstance(v, (int, float)))}")
             
@@ -631,11 +655,16 @@ class TrainingService:
             finally:
                 processed_stocks += 1
                 data_preparation_progress = int(processed_stocks / total_stocks * 100)
+                elapsed = time.time() - training_progress[task_id].get('start_time', time.time())
                 training_progress[task_id] = {
                     'stage': 'data_preparation',
                     'progress': data_preparation_progress,
                     'start_time': training_progress[task_id].get('start_time'),
                     'data_preparation_progress': data_preparation_progress,
+                    'current_stock': code,
+                    'total_stocks': total_stocks,
+                    'elapsed_seconds': elapsed,
+                    'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, data_preparation_progress),
                 }
         
         if not all_features:
@@ -846,6 +875,7 @@ class TrainingService:
                 'val_loss': val_loss,
                 'start_time': training_start_time,
                 'elapsed_seconds': elapsed,
+                'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, progress),
             }
             
             if (epoch + 1) % 10 == 0 or epoch == epochs - 1:
@@ -913,21 +943,36 @@ class TrainingService:
         
         training_start_time = training_progress.get(task_id, {}).get('start_time', time.time())
         
+        elapsed = time.time() - training_start_time
         training_progress[task_id] = {
             'stage': 'training',
             'progress': 10,
             'start_time': training_start_time,
-            'elapsed_seconds': time.time() - training_start_time,
+            'elapsed_seconds': elapsed,
+            'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, 10),
         }
         self._log(task_id, f"开始训练 {model_type} 模型，参数: {config}")
-        model.fit(X_train, y_train)
+
+        elapsed = time.time() - training_start_time
         training_progress[task_id] = {
             'stage': 'training',
-            'progress': 100,
+            'progress': 30,
             'start_time': training_start_time,
-            'elapsed_seconds': time.time() - training_start_time,
+            'elapsed_seconds': elapsed,
+            'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, 30),
         }
-        self._log(task_id, "模型训练完成")
+        self._log(task_id, "数据准备完成，开始拟合模型...")
+        model.fit(X_train, y_train)
+
+        elapsed = time.time() - training_start_time
+        training_progress[task_id] = {
+            'stage': 'validating',
+            'progress': 80,
+            'start_time': training_start_time,
+            'elapsed_seconds': elapsed,
+            'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, 80),
+        }
+        self._log(task_id, "模型拟合完成，正在验证...")
         
         predictions = model.predict(X_val)
         
