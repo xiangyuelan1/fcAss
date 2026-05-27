@@ -25,6 +25,7 @@ import { useAuthStore } from '@/store'
 import OnboardingGuide, { isOnboardingCompleted } from '@/components/OnboardingGuide'
 import MascotBull from '@/components/MascotBull'
 import FunPredictionResult, { FunPredictionResultProps } from '@/components/FunPredictionResult'
+import StockCodeInput from '@/components/StockCodeInput'
 
 interface StaleModel {
   model_id: number
@@ -196,9 +197,19 @@ const Dashboard: React.FC = () => {
   const fetchMyPredictions = async () => {
     try {
       const res: any = await predictionApi.getMyPredictions()
-      const items = res?.items || (Array.isArray(res) ? res : [])
-      setMyPredictions(Array.isArray(items) ? items : [])
-    } catch {}
+      /* 兼容多种返回格式：{ items: [...] } / { data: [...] } / 直接数组 */
+      let items: any[] = []
+      if (Array.isArray(res)) {
+        items = res
+      } else if (res?.items && Array.isArray(res.items)) {
+        items = res.items
+      } else if (res?.data && Array.isArray(res.data)) {
+        items = res.data
+      }
+      setMyPredictions(items)
+    } catch {
+      setMyPredictions([])
+    }
   }
 
   const fetchWatchlistQuotes = async () => {
@@ -207,33 +218,60 @@ const Dashboard: React.FC = () => {
       const data: any = await watchlistApi.getWatchlists()
       const lists = data?.items || (Array.isArray(data) ? data : [])
       if (lists.length === 0) { setWatchlistQuotes([]); return }
-      // 记录第一个自选列表的 ID，用于后续添加股票
       setWatchlistId(lists[0].id || null)
-      const items = lists[0].items || lists[0].stocks || []
-      if (items.length === 0) { setWatchlistQuotes([]); return }
-      const quotes: any[] = []
-      for (const item of items.slice(0, 10)) {
-        try {
-          const quote: any = await dataApi.getRealtimeQuote(item.stock_code)
-          quotes.push({
-            code: item.stock_code,
-            name: item.stock_name || item.stock_code,
-            price: quote?.price || quote?.close,
-            change_pct: quote?.change_pct,
-            open: quote?.open,
-            high: quote?.high,
-            low: quote?.low,
-          })
-        } catch {
-          quotes.push({
-            code: item.stock_code,
-            name: item.stock_name || item.stock_code,
-            price: null,
-            change_pct: null,
-          })
-        }
+
+      /* 从所有自选列表中收集股票 */
+      const allItems: any[] = []
+      for (const list of lists) {
+        const items = list.items || list.stocks || []
+        allItems.push(...items)
       }
-      setWatchlistQuotes(quotes)
+      if (allItems.length === 0) { setWatchlistQuotes([]); return }
+
+      /* 优先使用批量接口获取行情 */
+      const codes = allItems.slice(0, 50).map((item: any) => item.stock_code)
+      try {
+        const quoteData: any = await dataApi.getRealtimeQuotes(codes)
+        const quotesMap: Record<string, any> = {}
+        for (const q of (quoteData?.quotes || [])) {
+          quotesMap[q.code || q.stock_code] = q
+        }
+        const results = allItems.slice(0, 50).map((item: any) => {
+          const q = quotesMap[item.stock_code]
+          return {
+            code: item.stock_code,
+            name: item.stock_name || item.stock_code,
+            price: q?.price || q?.close || null,
+            change_pct: q?.change_pct || q?.change_percent || null,
+            open: q?.open,
+            high: q?.high,
+            low: q?.low,
+          }
+        })
+        setWatchlistQuotes(results)
+      } catch {
+        /* 批量接口失败，回退到逐个获取 */
+        const results: any[] = []
+        for (const item of allItems.slice(0, 10)) {
+          try {
+            const q: any = await dataApi.getRealtimeQuote(item.stock_code)
+            results.push({
+              code: item.stock_code,
+              name: item.stock_name || item.stock_code,
+              price: q?.price || q?.close || null,
+              change_pct: q?.change_pct || q?.change_percent || null,
+            })
+          } catch {
+            results.push({
+              code: item.stock_code,
+              name: item.stock_name || item.stock_code,
+              price: null,
+              change_pct: null,
+            })
+          }
+        }
+        setWatchlistQuotes(results)
+      }
     } catch {
       setWatchlistQuotes([])
     } finally {
@@ -576,11 +614,10 @@ const Dashboard: React.FC = () => {
                 />
               </Col>
               <Col xs={24} sm={8}>
-                <Input
-                  placeholder="股票代码，如 000001"
+                <StockCodeInput
                   value={quickStockCode}
-                  onChange={e => setQuickStockCode(e.target.value)}
-                  onPressEnter={handleQuickPredict}
+                  onChange={setQuickStockCode}
+                  placeholder="股票代码，如 000001"
                 />
               </Col>
               <Col xs={24} sm={6}>
@@ -759,7 +796,7 @@ const Dashboard: React.FC = () => {
 
         {/* 右栏 40% */}
         <Col xs={24} lg={10}>
-          {/* 我的模型（紧凑行列表） */}
+          {/* 我的模型（合并训练进度+回测结果） */}
           <Card
             title="🤖 我的模型"
             size="small"
@@ -774,55 +811,147 @@ const Dashboard: React.FC = () => {
             }
           >
             {recentModels.length > 0 ? (
-              recentModels.map((model) => (
-                <div
-                  key={model.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '8px 12px',
-                    marginBottom: 6,
-                    background: '#fafafa',
-                    borderRadius: 6,
-                    borderLeft: `3px solid ${model.status === 'trained' ? '#52c41a' : model.status === 'draft' ? '#d9d9d9' : '#1890ff'}`,
-                  }}
-                >
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {model.name}
+              recentModels.map((model) => {
+                /* 按 model_id 关联训练任务和回测结果 */
+                const modelTasks = recentTasks.filter(t => t.model_id === model.id)
+                const runningTask = modelTasks.find(t => t.status === 'running')
+                const completedTask = modelTasks.find(t => t.status === 'completed')
+                const modelBacktest = backtestResults.find((bt: any) => bt.model_id === model.id)
+                const progress = runningTask ? progressMap[runningTask.id] : null
+
+                return (
+                  <div
+                    key={model.id}
+                    style={{
+                      padding: '8px 12px',
+                      marginBottom: 6,
+                      background: '#fafafa',
+                      borderRadius: 6,
+                      borderLeft: `3px solid ${model.status === 'trained' ? '#52c41a' : model.status === 'draft' ? '#d9d9d9' : '#1890ff'}`,
+                    }}
+                  >
+                    {/* 第一行：模型名称 + 算法Tag + 状态Tag + 操作按钮 */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {model.name}
+                        </div>
+                        <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+                          <Tag color="blue" style={{ fontSize: 11, lineHeight: '16px', padding: '0 4px', margin: 0 }}>
+                            {model.model_type?.toUpperCase()}
+                          </Tag>
+                          <Tag color={getStatusColor(model.status)} style={{ fontSize: 11, lineHeight: '16px', padding: '0 4px', margin: 0 }}>
+                            {getStatusText(model.status)}
+                          </Tag>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 4, flexShrink: 0, marginLeft: 8 }}>
+                        {model.status === 'draft' && (
+                          <>
+                            <Button size="small" type="primary" onClick={() => handleTrainModel(model.id)}>训练</Button>
+                            <Button size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>
+                          </>
+                        )}
+                        {model.status === 'trained' && (
+                          <>
+                            <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
+                            <Button size="small" onClick={() => navigate('/train-predict?tab=backtest')}>回测</Button>
+                          </>
+                        )}
+                        {model.status === 'deployed' && (
+                          <>
+                            <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
+                            <Button size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
-                      <Tag color="blue" style={{ fontSize: 11, lineHeight: '16px', padding: '0 4px', margin: 0 }}>
-                        {model.model_type?.toUpperCase()}
-                      </Tag>
-                      <Tag color={getStatusColor(model.status)} style={{ fontSize: 11, lineHeight: '16px', padding: '0 4px', margin: 0 }}>
-                        {getStatusText(model.status)}
-                      </Tag>
-                    </div>
+
+                    {/* 运行中的训练任务：进度条+阶段+剩余时间 */}
+                    {runningTask && (
+                      <div style={{ marginTop: 6 }}>
+                        {progress ? (
+                          <>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#666', marginBottom: 2 }}>
+                              <span style={{ color: '#1890ff' }}>
+                                <LoadingOutlined spin style={{ marginRight: 4 }} />
+                                {stageMap[progress.stage] || '处理中'}
+                              </span>
+                              <span>
+                                ⏱ {formatDuration(progress.elapsed_seconds || getElapsedTime(runningTask))}
+                                {(() => {
+                                  const remaining = getEstimatedRemaining(progress.progress || 0, progress.elapsed_seconds || getElapsedTime(runningTask))
+                                  return remaining !== null && remaining > 0 ? (
+                                    <> · 剩余 <span style={{ color: '#f5222d' }}>{formatDuration(remaining)}</span></>
+                                  ) : null
+                                })()}
+                              </span>
+                            </div>
+                            <Progress percent={Math.round(progress.progress || 0)} size="small" status="active" />
+                          </>
+                        ) : (
+                          <>
+                            <Progress percent={0} size="small" status="active" />
+                            <div style={{ fontSize: 11, color: '#999' }}>等待训练进度...</div>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 已完成的训练任务：训练指标 */}
+                    {completedTask && completedTask.metrics && (
+                      <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                        {Object.entries(completedTask.metrics).slice(0, 2).map(([key, value]: [string, any]) => {
+                          if (typeof value !== 'number') return null
+                          return (
+                            <Tag key={key} style={{ fontSize: 10, lineHeight: '14px', padding: '0 3px', margin: 0 }}>
+                              {key.toUpperCase()}: {value.toFixed(4)}
+                            </Tag>
+                          )
+                        })}
+                        {!runningTask && (
+                          <>
+                            <Button size="small" type="primary" style={{ fontSize: 10, lineHeight: '14px', padding: '0 4px', height: 18 }} onClick={() => navigate('/train-predict')}>预测</Button>
+                            <Button size="small" style={{ fontSize: 10, lineHeight: '14px', padding: '0 4px', height: 18 }} onClick={() => navigate('/train-predict?tab=backtest')}>回测</Button>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 回测结果：收益率+夏普比率 */}
+                    {modelBacktest && (
+                      <div style={{ marginTop: 4, display: 'flex', gap: 12, fontSize: 12 }}>
+                        <span>
+                          收益率 <strong style={{ color: modelBacktest.total_return >= 0 ? '#f5222d' : '#52c41a' }}>
+                            {modelBacktest.total_return != null ? `${(modelBacktest.total_return * 100).toFixed(2)}%` : '-'}
+                          </strong>
+                        </span>
+                        <span>
+                          夏普 <strong>{modelBacktest.sharpe_ratio != null ? modelBacktest.sharpe_ratio.toFixed(2) : '-'}</strong>
+                        </span>
+                      </div>
+                    )}
+
+                    {/* 失败的训练任务 */}
+                    {modelTasks.some(t => t.status === 'failed') && (
+                      <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: '#f5222d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
+                          训练失败
+                        </span>
+                        <Button
+                          size="small"
+                          type="primary"
+                          danger
+                          style={{ fontSize: 10, lineHeight: '14px', padding: '0 4px', height: 18 }}
+                          onClick={() => handleRetryTask(modelTasks.find(t => t.status === 'failed')!)}
+                        >
+                          重试
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', gap: 4, flexShrink: 0, marginLeft: 8 }}>
-                    {model.status === 'draft' && (
-                      <>
-                        <Button size="small" type="primary" onClick={() => handleTrainModel(model.id)}>训练</Button>
-                        <Button size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>
-                      </>
-                    )}
-                    {model.status === 'trained' && (
-                      <>
-                        <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
-                        <Button size="small" onClick={() => navigate('/train-predict?tab=backtest')}>回测</Button>
-                      </>
-                    )}
-                    {model.status === 'deployed' && (
-                      <>
-                        <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
-                        <Button size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))
+                )
+              })
             ) : (
               <div style={{ textAlign: 'center', padding: '16px 0', color: '#999', fontSize: 13 }}>
                 <RobotOutlined style={{ fontSize: 24, marginBottom: 4, display: 'block' }} />
@@ -835,155 +964,6 @@ const Dashboard: React.FC = () => {
               </div>
             )}
           </Card>
-
-          {/* 训练任务（紧凑卡片 + 实时进度） */}
-          <Card
-            title="🏋️ 训练任务"
-            size="small"
-            style={{ marginBottom: 16 }}
-            extra={<Button type="link" size="small" onClick={() => navigate('/train-predict')}>查看全部</Button>}
-          >
-            {recentTasks.length > 0 ? (
-              recentTasks.map((task) => {
-                const progress = progressMap[task.id]
-                const model = recentModels.find(m => m.id === task.model_id)
-                const isRunning = task.status === 'running'
-
-                return (
-                  <div
-                    key={task.id}
-                    style={{
-                      padding: '8px 12px',
-                      marginBottom: 6,
-                      background: '#fafafa',
-                      borderRadius: 6,
-                      borderLeft: `3px solid ${task.status === 'completed' ? '#52c41a' : task.status === 'running' ? '#1890ff' : task.status === 'failed' ? '#f5222d' : '#d9d9d9'}`,
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, minWidth: 0, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {model?.name || `模型 #${task.model_id}`}
-                      </div>
-                      <Tag color={getStatusColor(task.status)} style={{ fontSize: 11, lineHeight: '16px', padding: '0 4px', margin: 0 }}>
-                        {isRunning && <LoadingOutlined spin style={{ marginRight: 4 }} />}
-                        {getStatusText(task.status)}
-                      </Tag>
-                    </div>
-
-                    {/* 运行中：实时进度 */}
-                    {isRunning && progress && (
-                      <div style={{ marginTop: 6 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#666', marginBottom: 2 }}>
-                          <span style={{ color: '#1890ff' }}>{stageMap[progress.stage] || '处理中'}</span>
-                          <span>
-                            ⏱ {formatDuration(progress.elapsed_seconds || getElapsedTime(task))}
-                            {(() => {
-                              const remaining = getEstimatedRemaining(progress.progress || 0, progress.elapsed_seconds || getElapsedTime(task))
-                              return remaining !== null && remaining > 0 ? (
-                                <> · 剩余 <span style={{ color: '#f5222d' }}>{formatDuration(remaining)}</span></>
-                              ) : null
-                            })()}
-                          </span>
-                        </div>
-                        <Progress percent={Math.round(progress.progress || 0)} size="small" status="active" />
-                      </div>
-                    )}
-
-                    {/* 运行中但无 SSE */}
-                    {isRunning && !progress && (
-                      <div style={{ marginTop: 6 }}>
-                        <Progress percent={0} size="small" status="active" />
-                        <div style={{ fontSize: 11, color: '#999' }}>等待训练进度...</div>
-                      </div>
-                    )}
-
-                    {/* 已完成：摘要 */}
-                    {task.status === 'completed' && task.metrics && (
-                      <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {Object.entries(task.metrics).slice(0, 2).map(([key, value]: [string, any]) => {
-                          if (typeof value !== 'number') return null
-                          return <Tag key={key} style={{ fontSize: 10, lineHeight: '14px', padding: '0 3px', margin: 0 }}>{key.toUpperCase()}: {value.toFixed(4)}</Tag>
-                        })}
-                      </div>
-                    )}
-
-                    {/* 失败 */}
-                    {task.status === 'failed' && task.error_message && (
-                      <div style={{ marginTop: 4, fontSize: 11, color: '#f5222d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {task.error_message.length > 60 ? task.error_message.slice(0, 60) + '...' : task.error_message}
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                      <span style={{ fontSize: 10, color: '#bbb' }}>
-                        {task.start_time && new Date(task.start_time).toLocaleString()}
-                        {task.duration != null && ` · ${formatDuration(task.duration)}`}
-                      </span>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        {task.status === 'completed' && (
-                          <>
-                            <Button size="small" type="primary" style={{ fontSize: 11 }} onClick={() => navigate('/train-predict')}>预测</Button>
-                            <Button size="small" style={{ fontSize: 11 }} onClick={() => navigate('/train-predict?tab=backtest')}>回测</Button>
-                          </>
-                        )}
-                        {task.status === 'failed' && (
-                          <Button size="small" type="primary" danger style={{ fontSize: 11 }} onClick={() => handleRetryTask(task)}>重试</Button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })
-            ) : (
-              <div style={{ textAlign: 'center', padding: '16px 0', color: '#999', fontSize: 13 }}>
-                <PlayCircleOutlined style={{ fontSize: 24, marginBottom: 4, display: 'block' }} />
-                暂无训练任务
-              </div>
-            )}
-          </Card>
-
-          {/* 回测结果（最近3条，每行一个） */}
-          {backtestResults.length > 0 && (
-            <Card
-              title="📈 回测结果"
-              size="small"
-              style={{ marginBottom: 16 }}
-              extra={<Button type="link" size="small" onClick={() => navigate('/train-predict?tab=backtest')}>查看详情</Button>}
-            >
-              {backtestResults.slice(0, 3).map((bt: any) => (
-                <div
-                  key={bt.id}
-                  style={{
-                    padding: '8px 12px',
-                    marginBottom: 6,
-                    background: '#fafafa',
-                    borderRadius: 6,
-                    borderLeft: '3px solid #722ed1',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <span style={{ fontWeight: 600, fontSize: 13 }}>回测 #{bt.id}</span>
-                    <span style={{ fontSize: 10, color: '#bbb' }}>{bt.start_date} ~ {bt.end_date}</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 16 }}>
-                    <span style={{ fontSize: 12 }}>
-                      收益率 <strong style={{ color: bt.total_return >= 0 ? '#f5222d' : '#52c41a' }}>
-                        {bt.total_return != null ? `${(bt.total_return * 100).toFixed(2)}%` : '-'}
-                      </strong>
-                    </span>
-                    <span style={{ fontSize: 12 }}>
-                      夏普 <strong>{bt.sharpe_ratio != null ? bt.sharpe_ratio.toFixed(2) : '-'}</strong>
-                    </span>
-                    <span style={{ fontSize: 12 }}>
-                      回撤 <strong style={{ color: '#f5222d' }}>
-                        {bt.max_drawdown != null ? `${(bt.max_drawdown * 100).toFixed(1)}%` : '-'}
-                      </strong>
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </Card>
-          )}
         </Col>
       </Row>
 
@@ -1014,10 +994,10 @@ const Dashboard: React.FC = () => {
         </div>
         <div>
           <div style={{ marginBottom: 8, fontWeight: 500 }}>输入股票代码</div>
-          <Input
-            placeholder="如 000001"
+          <StockCodeInput
             value={predictStockCode}
-            onChange={e => setPredictStockCode(e.target.value)}
+            onChange={setPredictStockCode}
+            placeholder="如 000001"
           />
         </div>
       </Modal>

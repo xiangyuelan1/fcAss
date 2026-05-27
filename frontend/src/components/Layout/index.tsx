@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Layout, Menu, Button, Modal, theme, Dropdown, Avatar, Space, Badge, Drawer } from 'antd'
+import { Layout, Menu, Button, Modal, theme, Dropdown, Avatar, Space, Badge, Drawer, Popover, Select, message } from 'antd'
 import {
   DashboardOutlined,
   MenuFoldOutlined,
@@ -21,14 +21,99 @@ import {
   AndroidOutlined,
   SunOutlined,
   MoonOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore, useThemeStore } from '@/store'
-import { authApi, messageApi } from '@/services/api'
+import { authApi, messageApi, communityApi } from '@/services/api'
 import OnboardingGuide from '@/components/OnboardingGuide'
 import MascotBull from '@/components/MascotBull'
+import FunPredictionResult from '@/components/FunPredictionResult'
+import StockCodeInput from '@/components/StockCodeInput'
 
 const { Header, Sider, Content } = Layout
+
+/* ================================================================
+ *  快速预测内容组件：嵌入顶部栏 Popover 中
+ * ================================================================ */
+
+const QuickPredictContent: React.FC = () => {
+  const [models, setModels] = useState<any[]>([])
+  const [selectedModel, setSelectedModel] = useState<any>(null)
+  const [stockCode, setStockCode] = useState('600519')
+  const [predicting, setPredicting] = useState(false)
+  const [result, setResult] = useState<any>(null)
+
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const data: any = await communityApi.getModels({ sort_by: 'likes', page_size: 10 })
+        const items = data?.items || (Array.isArray(data) ? data : [])
+        setModels(items)
+        if (items.length > 0) setSelectedModel(items[0])
+      } catch {
+        // 模型列表加载失败时静默处理，用户可手动刷新
+      }
+    }
+    fetchModels()
+  }, [])
+
+  const handlePredict = async () => {
+    if (!selectedModel || !stockCode) return
+    setPredicting(true)
+    setResult(null)
+    try {
+      const data = await communityApi.predictWithModel(selectedModel.id, {
+        stock_code: stockCode,
+        days: 1,
+      })
+      setResult(data)
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '预测失败')
+    } finally {
+      setPredicting(false)
+    }
+  }
+
+  return (
+    <div style={{ width: 300 }}>
+      <Select
+        style={{ width: '100%', marginBottom: 8 }}
+        placeholder="选择社区模型"
+        value={selectedModel?.id}
+        onChange={(val) => setSelectedModel(models.find(m => m.id === val))}
+        options={models.map(m => ({
+          label: `${m.name} (${m.model_type?.toUpperCase()})`,
+          value: m.id,
+        }))}
+        size="small"
+      />
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <StockCodeInput
+          value={stockCode}
+          onChange={setStockCode}
+          placeholder="股票代码（如 600519）"
+          size="small"
+          style={{ flex: 1 }}
+        />
+        <Button type="primary" size="small" loading={predicting} onClick={handlePredict}>
+          预测！
+        </Button>
+      </div>
+      {result && (
+        <FunPredictionResult
+          direction={result.prediction_label || result.direction || 'flat'}
+          confidence={result.confidence}
+          stockCode={stockCode}
+          predictedPrice={result.predicted_close || result.predicted_price}
+          predictedChangePct={result.predicted_change_pct}
+          compact
+        />
+      )}
+    </div>
+  )
+}
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -254,6 +339,15 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Popover
+              content={<QuickPredictContent />}
+              title="🔮 快速预测"
+              trigger="click"
+              placement="bottomRight"
+              overlayStyle={{ width: 300 }}
+            >
+              <Button type="text" icon={<ThunderboltOutlined />} style={{ color: '#1890ff' }} />
+            </Popover>
             <Button
               type="text"
               icon={isDark ? <SunOutlined /> : <MoonOutlined />}
@@ -503,6 +597,17 @@ const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <Popover
+              content={<QuickPredictContent />}
+              title="🔮 快速预测"
+              trigger="click"
+              placement="bottomRight"
+              overlayStyle={{ width: 360 }}
+            >
+              <Button type="primary" icon={<ThunderboltOutlined />} size="small">
+                快速预测
+              </Button>
+            </Popover>
             <Button
               type="text"
               icon={isDark ? <SunOutlined /> : <MoonOutlined />}

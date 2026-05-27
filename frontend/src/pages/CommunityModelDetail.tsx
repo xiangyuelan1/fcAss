@@ -41,6 +41,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { communityApi } from '@/services/api'
 import { CommunityModel, CommunitySignal } from '@/types'
 import FunPredictionResult from '@/components/FunPredictionResult'
+import StockCodeInput from '@/components/StockCodeInput'
 
 const MODEL_TYPE_COLORS: Record<string, string> = {
   lstm: 'blue',
@@ -583,10 +584,10 @@ const CommunityModelDetail: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div>
             <div style={{ marginBottom: 4, fontWeight: 500 }}>股票代码</div>
-            <Input
-              placeholder="输入股票代码，如 000001"
+            <StockCodeInput
               value={predictStockCode}
-              onChange={(e) => setPredictStockCode(e.target.value)}
+              onChange={setPredictStockCode}
+              placeholder="输入股票代码，如 000001"
             />
           </div>
           <div>
