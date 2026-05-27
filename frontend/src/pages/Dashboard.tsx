@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState, useRef, useCallback } from 'react'
 import {
   Row, Col, Card, Statistic, Tag, Button, Alert, message,
   Switch, Skeleton, Progress, Spin, Drawer, Modal, Select, Input, Form, Space, Table,
@@ -22,6 +22,7 @@ import {
 } from '@/services/api'
 import { UserModel, TrainingTask, PredictionShareItem } from '@/types'
 import { useAuthStore } from '@/store'
+import useMarketWs from '@/hooks/useMarketWs'
 import OnboardingGuide, { isOnboardingCompleted } from '@/components/OnboardingGuide'
 import MascotBull from '@/components/MascotBull'
 import FunPredictionResult, { FunPredictionResultProps } from '@/components/FunPredictionResult'
@@ -115,6 +116,30 @@ const Dashboard: React.FC = () => {
   const [addWatchlistName, setAddWatchlistName] = useState('')
   const [addWatchlistLoading, setAddWatchlistLoading] = useState(false)
   const [watchlistId, setWatchlistId] = useState<number | null>(null)
+
+  // WebSocket 实时行情：收到推送后按 code 合并更新自选股列表
+  const handleMarketQuotes = useCallback((quotes: any[]) => {
+    setWatchlistQuotes(prev => {
+      const quoteMap: Record<string, any> = {}
+      for (const q of quotes) {
+        quoteMap[q.code] = q
+      }
+      return prev.map(item => {
+        const q = quoteMap[item.code]
+        if (q) {
+          return {
+            ...item,
+            price: q.close || q.price || item.price,
+            change_pct: q.change_pct ?? q.change_percent ?? item.change_pct,
+            volume: q.volume ?? item.volume,
+          }
+        }
+        return item
+      })
+    })
+  }, [])
+
+  useMarketWs(handleMarketQuotes)
 
   // 创建模型抽屉
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false)
@@ -700,7 +725,7 @@ const Dashboard: React.FC = () => {
 
           {/* 自选股行情（紧凑列表） */}
           <Card
-            title="📋 自选股行情"
+            title={<span>📋 自选股行情 <Tag color="green" style={{ fontSize: 10, marginLeft: 4 }}>实时</Tag></span>}
             size="small"
             style={{ marginBottom: 16 }}
             extra={<Button type="link" size="small" onClick={() => navigate('/watchlist')}>管理自选</Button>}

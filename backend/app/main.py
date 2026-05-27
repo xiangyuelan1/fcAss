@@ -56,28 +56,61 @@ ws_manager = ConnectionManager()
 
 
 async def market_data_pusher():
-    """后台任务：每30秒推送热门股票最新行情到所有WebSocket客户端"""
+    """后台任务：每30秒推送热门股票+用户自选股最新行情到所有WebSocket客户端"""
     while True:
         try:
             db = SessionLocal()
             try:
                 from app.services.data_service import DataService
+                from app.models.watchlist import WatchlistItem
                 ds = DataService(db)
-                hot_stocks = ['600519', '000858', '601318', '000001', '600036']
+                hot_stocks = []
+                try:
+                    from app.models.system_config import SystemConfig
+                    cfg = db.query(SystemConfig).filter(
+                        SystemConfig.key == 'hot_stocks',
+                        SystemConfig.is_active == True,
+                    ).first()
+                    if cfg and cfg.value:
+                        hot_stocks = [c.strip() for c in cfg.value.split(',') if c.strip()]
+                except Exception:
+                    pass
+                watchlist_codes = set()
+                try:
+                    items = db.query(WatchlistItem.stock_code).distinct().all()
+                    watchlist_codes = {item[0] for item in items if item[0]}
+                except Exception:
+                    pass
+                all_codes = list(dict.fromkeys(hot_stocks + list(watchlist_codes)))[:50]
                 quotes = []
-                for code in hot_stocks:
-                    try:
-                        prices = ds.get_stock_prices(code, limit=1)
-                        if prices:
-                            p = prices[-1]
-                            quotes.append({
-                                'code': code,
-                                'close': float(p.close) if p.close else 0,
-                                'change_pct': float(p.change_pct) if p.change_pct else 0,
-                                'volume': int(p.volume) if p.volume else 0,
-                            })
-                    except Exception:
-                        continue
+                try:
+                    from app.services.data_fetcher import DataFetcher
+                    rt_quotes = DataFetcher.get_realtime_quote(all_codes)
+                    for code, q in rt_quotes.items():
+                        quotes.append({
+                            'code': code,
+                            'close': q.get('close', 0),
+                            'price': q.get('price', q.get('close', 0)),
+                            'change_pct': q.get('change_pct', q.get('change_percent', 0)),
+                            'volume': q.get('volume', 0),
+                            'open': q.get('open', 0),
+                            'high': q.get('high', 0),
+                            'low': q.get('low', 0),
+                        })
+                except Exception:
+                    for code in all_codes:
+                        try:
+                            prices = ds.get_stock_prices(code, limit=1)
+                            if prices:
+                                p = prices[-1]
+                                quotes.append({
+                                    'code': code,
+                                    'close': float(p.close) if p.close else 0,
+                                    'change_pct': float(p.change_pct) if p.change_pct else 0,
+                                    'volume': int(p.volume) if p.volume else 0,
+                                })
+                        except Exception:
+                            continue
                 if quotes:
                     await ws_manager.broadcast({'type': 'market', 'data': quotes})
             finally:
