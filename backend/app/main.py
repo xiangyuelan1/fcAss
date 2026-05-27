@@ -387,17 +387,24 @@ async def lifespan(app: FastAPI):
     print("[OK] 数据库初始化完成")
     _migrate_db()
     _ensure_default_admin()
-    _sync_stock_pool_on_startup()
 
-    # 启动行情推送后台任务
-    asyncio.create_task(market_data_pusher())
-
-    # 启动社区模型每日自动预测后台任务
-    asyncio.create_task(auto_predict_community_models())
+    asyncio.create_task(_background_startup_tasks())
 
     yield
 
     print("[关闭] 应用关闭")
+
+
+async def _background_startup_tasks():
+    """后台启动任务：不阻塞应用就绪，避免健康检查超时"""
+    await asyncio.sleep(3)
+    try:
+        _sync_stock_pool_on_startup()
+    except Exception as e:
+        print(f"[WARN] 股票池同步失败: {e}")
+
+    asyncio.create_task(market_data_pusher())
+    asyncio.create_task(auto_predict_community_models())
 
 
 def create_app() -> FastAPI:
