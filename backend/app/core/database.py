@@ -119,6 +119,7 @@ _MIGRATION_TABLES = {
         ("prediction_value", "FLOAT"),
         ("confidence", "FLOAT"),
         ("predicted_change_pct", "FLOAT"),
+        ("predicted_price", "FLOAT"),
         ("prediction_data", "JSON"),
         ("is_published", "BOOLEAN DEFAULT 0"),
         ("likes_count", "INTEGER DEFAULT 0"),
@@ -128,6 +129,9 @@ _MIGRATION_TABLES = {
         "CREATE INDEX IF NOT EXISTS ix_prediction_shares_user_id ON prediction_shares(user_id)",
         "CREATE INDEX IF NOT EXISTS ix_prediction_shares_stock_code ON prediction_shares(stock_code)",
         "CREATE INDEX IF NOT EXISTS ix_prediction_shares_is_published ON prediction_shares(is_published)",
+    ],
+    "prediction_shares": [
+        ("predicted_price", "FLOAT"),
     ],
     "custom_indicators": [
         ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),

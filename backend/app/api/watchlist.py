@@ -38,7 +38,11 @@ async def get_watchlists(
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    """获取当前用户的所有自选表（含股票数量）"""
+    """获取当前用户的所有自选表（含股票列表和数量）
+
+    返回每个自选表对象中嵌入 items 字段（股票列表），
+    前端可直接从 list.items 获取股票，无需额外请求。
+    """
     from sqlalchemy import func
 
     watchlists = (
@@ -56,7 +60,17 @@ async def get_watchlists(
     )
     count_map = {row.watchlist_id: row.cnt for row in count_rows}
 
-    return [w.to_dict(stock_count=count_map.get(w.id, 0)) for w in watchlists]
+    item_rows = (
+        db.query(WatchlistItem)
+        .filter(WatchlistItem.watchlist_id.in_([w.id for w in watchlists]))
+        .order_by(WatchlistItem.added_at.desc())
+        .all()
+    )
+    items_map: dict[int, list[dict]] = {}
+    for item in item_rows:
+        items_map.setdefault(item.watchlist_id, []).append(item.to_dict())
+
+    return [w.to_dict(stock_count=count_map.get(w.id, 0), stocks=items_map.get(w.id, [])) for w in watchlists]
 
 
 @router.post("")

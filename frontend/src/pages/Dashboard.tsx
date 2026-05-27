@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import {
   Row, Col, Card, Statistic, Tag, Button, Alert, message,
-  Switch, Skeleton, Progress, Spin, Drawer, Modal, Select, Input, Form, Space, Table,
+  Switch, Skeleton, Progress, Spin, Drawer, Modal, Select, Input, Form, Space, Table, DatePicker,
 } from 'antd'
 import {
   DatabaseOutlined,
@@ -14,6 +14,7 @@ import {
   QuestionCircleOutlined,
   PlusOutlined,
   LoadingOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -148,6 +149,19 @@ const Dashboard: React.FC = () => {
 
   // 回测结果
   const [backtestResults, setBacktestResults] = useState<any[]>([])
+
+  // 模型卡片内展开预测/回测
+  const [expandedPredictModelId, setExpandedPredictModelId] = useState<number | null>(null)
+  const [modelPredictStockCode, setModelPredictStockCode] = useState('600519')
+  const [predictingTaskId, setPredictingTaskId] = useState<number | null>(null)
+  const [predictResult, setPredictResult] = useState<Record<number, any>>({})
+
+  const [expandedBacktestModelId, setExpandedBacktestModelId] = useState<number | null>(null)
+  const [backtestStockCode, setBacktestStockCode] = useState('600519')
+  const [backtestStartDate, setBacktestStartDate] = useState<string>('')
+  const [backtestEndDate, setBacktestEndDate] = useState<string>('')
+  const [backtestResult, setBacktestResult] = useState<Record<number, any>>({})
+  const [backtesting, setBacktesting] = useState(false)
 
   useEffect(() => {
     const init = async () => {
@@ -487,6 +501,66 @@ const Dashboard: React.FC = () => {
       failed: 'error', cancelled: 'warning',
     }
     return colors[status] || 'default'
+  }
+
+  const handleModelPredict = async (model: any) => {
+    const completedTask = recentTasks.find(t => t.model_id === model.id && t.status === 'completed')
+    if (!completedTask) {
+      message.warning('该模型没有已完成的训练任务，请先训练')
+      return
+    }
+    setPredictingTaskId(completedTask.id)
+    try {
+      const data = await predictionApi.predict({
+        task_id: completedTask.id,
+        stock_code: modelPredictStockCode,
+        days: 1,
+      })
+      setPredictResult(prev => ({ ...prev, [model.id]: data }))
+      fetchMyPredictions()
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '预测失败')
+    } finally {
+      setPredictingTaskId(null)
+    }
+  }
+
+  const handleModelBacktest = async (model: any) => {
+    const completedTask = recentTasks.find(t => t.model_id === model.id && t.status === 'completed')
+    if (!completedTask) {
+      message.warning('该模型没有已完成的训练任务，请先训练')
+      return
+    }
+    if (!backtestStartDate || !backtestEndDate) {
+      message.warning('请选择回测日期范围')
+      return
+    }
+    setBacktesting(true)
+    try {
+      const data = await backtestApi.runBacktest({
+        task_id: completedTask.id,
+        start_date: backtestStartDate,
+        end_date: backtestEndDate,
+      })
+      setBacktestResult(prev => ({ ...prev, [model.id]: data }))
+      fetchBacktestResults()
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      message.error(typeof detail === 'string' ? detail : '回测失败')
+    } finally {
+      setBacktesting(false)
+    }
+  }
+
+  const handleExpandPredict = (modelId: number) => {
+    setExpandedPredictModelId(expandedPredictModelId === modelId ? null : modelId)
+    setExpandedBacktestModelId(null)
+  }
+
+  const handleExpandBacktest = (modelId: number) => {
+    setExpandedBacktestModelId(expandedBacktestModelId === modelId ? null : modelId)
+    setExpandedPredictModelId(null)
   }
 
   const getStatusText = (status: string) => {
@@ -879,13 +953,19 @@ const Dashboard: React.FC = () => {
                         )}
                         {model.status === 'trained' && (
                           <>
-                            <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
-                            <Button size="small" onClick={() => navigate('/train-predict?tab=backtest')}>回测</Button>
+                            <Button size="small" type="primary" onClick={() => handleExpandPredict(model.id)}>
+                              {expandedPredictModelId === model.id ? '收起' : '预测'}
+                            </Button>
+                            <Button size="small" onClick={() => handleExpandBacktest(model.id)}>
+                              {expandedBacktestModelId === model.id ? '收起' : '回测'}
+                            </Button>
                           </>
                         )}
                         {model.status === 'deployed' && (
                           <>
-                            <Button size="small" type="primary" onClick={() => navigate('/train-predict')}>预测</Button>
+                            <Button size="small" type="primary" onClick={() => handleExpandPredict(model.id)}>
+                              {expandedPredictModelId === model.id ? '收起' : '预测'}
+                            </Button>
                             <Button size="small" onClick={() => navigate(`/models/build/${model.id}`)}>编辑</Button>
                           </>
                         )}
@@ -936,8 +1016,8 @@ const Dashboard: React.FC = () => {
                         })}
                         {!runningTask && (
                           <>
-                            <Button size="small" type="primary" style={{ fontSize: 10, lineHeight: '14px', padding: '0 4px', height: 18 }} onClick={() => navigate('/train-predict')}>预测</Button>
-                            <Button size="small" style={{ fontSize: 10, lineHeight: '14px', padding: '0 4px', height: 18 }} onClick={() => navigate('/train-predict?tab=backtest')}>回测</Button>
+                            <Button size="small" type="primary" style={{ fontSize: 10, lineHeight: '14px', padding: '0 4px', height: 18 }} onClick={() => handleExpandPredict(model.id)}>预测</Button>
+                            <Button size="small" style={{ fontSize: 10, lineHeight: '14px', padding: '0 4px', height: 18 }} onClick={() => handleExpandBacktest(model.id)}>回测</Button>
                           </>
                         )}
                       </div>
@@ -972,6 +1052,101 @@ const Dashboard: React.FC = () => {
                         >
                           重试
                         </Button>
+                      </div>
+                    )}
+
+                    {/* 展开的预测区域 */}
+                    {expandedPredictModelId === model.id && (
+                      <div style={{ marginTop: 8, padding: '8px 10px', background: '#fff', borderRadius: 4, border: '1px solid #e6f7ff' }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: '#1890ff' }}>
+                          <ThunderboltOutlined style={{ marginRight: 4 }} />快速预测
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <StockCodeInput
+                            value={modelPredictStockCode}
+                            onChange={setModelPredictStockCode}
+                            placeholder="股票代码，如 600519"
+                            size="small"
+                            style={{ flex: 1 }}
+                          />
+                          <Button
+                            type="primary"
+                            size="small"
+                            icon={<ThunderboltOutlined />}
+                            loading={predictingTaskId !== null && recentTasks.find(t => t.model_id === model.id && t.status === 'completed')?.id === predictingTaskId}
+                            onClick={() => handleModelPredict(model)}
+                          >
+                            预测
+                          </Button>
+                        </div>
+                        {predictResult[model.id] && (
+                          <div style={{ marginTop: 8 }}>
+                            <FunPredictionResult
+                              direction={predictResult[model.id].prediction_label || predictResult[model.id].direction || 'flat'}
+                              confidence={predictResult[model.id].confidence}
+                              stockCode={modelPredictStockCode}
+                              predictedPrice={predictResult[model.id].predicted_close || predictResult[model.id].predicted_price}
+                              predictedChangePct={predictResult[model.id].predicted_change_pct}
+                              compact={true}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 展开的回测区域 */}
+                    {expandedBacktestModelId === model.id && (
+                      <div style={{ marginTop: 8, padding: '8px 10px', background: '#fff', borderRadius: 4, border: '1px solid #f0f0f0' }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: '#722ed1' }}>
+                          <BarChartOutlined style={{ marginRight: 4 }} />快速回测
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <StockCodeInput
+                            value={backtestStockCode}
+                            onChange={setBacktestStockCode}
+                            placeholder="股票代码"
+                            size="small"
+                            style={{ width: 120 }}
+                          />
+                          <DatePicker
+                            size="small"
+                            placeholder="开始日期"
+                            onChange={(_, dateString) => setBacktestStartDate(dateString as string)}
+                            style={{ width: 130 }}
+                          />
+                          <DatePicker
+                            size="small"
+                            placeholder="结束日期"
+                            onChange={(_, dateString) => setBacktestEndDate(dateString as string)}
+                            style={{ width: 130 }}
+                          />
+                          <Button
+                            type="primary"
+                            size="small"
+                            icon={<BarChartOutlined />}
+                            loading={backtesting}
+                            onClick={() => handleModelBacktest(model)}
+                          >
+                            回测
+                          </Button>
+                        </div>
+                        {backtestResult[model.id] && (
+                          <div style={{ marginTop: 8, display: 'flex', gap: 12, fontSize: 12 }}>
+                            <span>
+                              收益率 <strong style={{ color: (backtestResult[model.id].total_return ?? 0) >= 0 ? '#f5222d' : '#52c41a' }}>
+                                {backtestResult[model.id].total_return != null ? `${(backtestResult[model.id].total_return * 100).toFixed(2)}%` : '-'}
+                              </strong>
+                            </span>
+                            <span>
+                              夏普比率 <strong>{backtestResult[model.id].sharpe_ratio != null ? backtestResult[model.id].sharpe_ratio.toFixed(2) : '-'}</strong>
+                            </span>
+                            <span>
+                              最大回撤 <strong style={{ color: '#f5222d' }}>
+                                {backtestResult[model.id].max_drawdown != null ? `${(backtestResult[model.id].max_drawdown * 100).toFixed(2)}%` : '-'}
+                              </strong>
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

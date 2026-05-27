@@ -22,6 +22,7 @@ router = APIRouter()
 class UserDetailResponse(BaseModel):
     id: int
     username: str
+    nickname: Optional[str] = None
     email: Optional[str] = None
     is_active: bool
     is_admin: bool
@@ -58,6 +59,15 @@ class SystemConfigUpdate(BaseModel):
     sort_order: Optional[int] = None
 
 
+def _is_online(last_heartbeat, threshold: datetime) -> bool:
+    """判断用户是否在线，兼容 naive/aware 两种 datetime"""
+    if last_heartbeat is None:
+        return False
+    hb = last_heartbeat.replace(tzinfo=timezone.utc) if last_heartbeat.tzinfo is None else last_heartbeat
+    th = threshold.replace(tzinfo=timezone.utc) if threshold.tzinfo is None else threshold
+    return hb >= th
+
+
 @router.get("/users", response_model=List[UserDetailResponse])
 async def list_users(
     skip: int = 0,
@@ -72,6 +82,7 @@ async def list_users(
         result.append({
             'id': u.id,
             'username': u.username,
+            'nickname': u.nickname,
             'email': u.email,
             'is_active': u.is_active,
             'is_admin': u.is_admin,
@@ -80,7 +91,7 @@ async def list_users(
             'last_login_at': u.last_login_at.isoformat() if u.last_login_at else None,
             'last_login_ip': u.last_login_ip,
             'last_heartbeat': u.last_heartbeat.isoformat() if u.last_heartbeat else None,
-            'is_online': u.last_heartbeat is not None and u.last_heartbeat >= threshold,
+            'is_online': _is_online(u.last_heartbeat, threshold),
         })
     return result
 
@@ -98,6 +109,7 @@ async def get_user(
     return {
         'id': user.id,
         'username': user.username,
+        'nickname': user.nickname,
         'email': user.email,
         'is_active': user.is_active,
         'is_admin': user.is_admin,
@@ -106,7 +118,7 @@ async def get_user(
         'last_login_at': user.last_login_at.isoformat() if user.last_login_at else None,
         'last_login_ip': user.last_login_ip,
         'last_heartbeat': user.last_heartbeat.isoformat() if user.last_heartbeat else None,
-        'is_online': user.last_heartbeat is not None and user.last_heartbeat >= threshold,
+        'is_online': _is_online(user.last_heartbeat, threshold),
     }
 
 
@@ -153,7 +165,7 @@ async def get_user_full_detail(
         raise HTTPException(status_code=404, detail="用户不存在")
 
     threshold = datetime.now(timezone.utc) - timedelta(minutes=5)
-    is_online = user.last_heartbeat is not None and user.last_heartbeat >= threshold
+    is_online = _is_online(user.last_heartbeat, threshold)
 
     user_models = db.query(UserORMModel).filter(UserORMModel.user_id == user_id).all()
     model_count = len(user_models)

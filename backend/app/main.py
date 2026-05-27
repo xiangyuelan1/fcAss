@@ -150,6 +150,30 @@ def _ensure_default_admin():
         db.close()
 
 
+def _ensure_test_users():
+    """确保内测用户存在（testuser1 ~ testuser20，密码均为 123456）"""
+    db = SessionLocal()
+    try:
+        for i in range(1, 21):
+            username = f"testuser{i}"
+            existing = db.query(User).filter(User.username == username).first()
+            if not existing:
+                user = User(
+                    username=username,
+                    hashed_password=get_password_hash("123456"),
+                    is_active=True,
+                    is_admin=False,
+                )
+                db.add(user)
+        db.commit()
+        print("[OK] 内测用户检查完成")
+    except Exception as e:
+        print(f"[WARN] 内测用户创建失败: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 def _sync_stock_pool_on_startup():
     """启动时自动同步A股股票池（仅名称和代码，不获取价格）
 
@@ -387,6 +411,7 @@ async def lifespan(app: FastAPI):
     print("[OK] 数据库初始化完成")
     _migrate_db()
     _ensure_default_admin()
+    _ensure_test_users()
 
     asyncio.create_task(_background_startup_tasks())
 

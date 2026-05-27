@@ -186,16 +186,59 @@ async def predict(
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # 尝试从模型检查点加载训练时保存的特征列名，确保预测特征与训练一致
+    try:
+        checkpoint_meta = ModelCheckpoint.load_checkpoint_metadata(task.id)
+        saved_feature_cols = checkpoint_meta.get('feature_cols', []) or []
+    except (FileNotFoundError, Exception):
+        saved_feature_cols = []
+
     # 确保股票有足够数据（自动获取和补充），并计算特征
     df = _ensure_stock_data(
         data_service, feature_service, request.stock_code,
         user_model.features, user_model.feature_config or {},
     )
 
-    feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
-                            'change_pct', 'change_amount', 'adj_close'}]
-    if not feature_cols:
-        raise HTTPException(status_code=400, detail="无可用特征列")
+    if saved_feature_cols:
+        available_cols = set(df.columns)
+        feature_cols = [col for col in saved_feature_cols if col in available_cols]
+        missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+
+        if missing_cols:
+            # 数据可能不够计算某些技术指标，尝试获取更多数据后重新计算
+            try:
+                data_service.sync_stock_prices(stock_code)
+                import time; time.sleep(1)
+                df = feature_service.calculate_features(
+                    stock_code=stock_code,
+                    indicators=user_model.features,
+                    indicator_params=user_model.feature_config or {},
+                    limit=10000,
+                )
+                if df is not None and not df.empty:
+                    available_cols = set(df.columns)
+                    feature_cols = [col for col in saved_feature_cols if col in available_cols]
+                    missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+            except Exception:
+                pass
+
+        if missing_cols:
+            # 仍有缺失列，用前向填充+0兜底确保维度一致
+            for col in missing_cols:
+                df[col] = 0.0
+            feature_cols = saved_feature_cols
+        if len(feature_cols) != len(saved_feature_cols):
+            trained_stocks = user_model.stock_codes or []
+            raise HTTPException(
+                status_code=400,
+                detail=f"模型需要{len(saved_feature_cols)}个特征，当前数据只有{len(feature_cols)}个可用。该模型训练时使用的股票为 {', '.join(trained_stocks)}，请使用这些股票进行预测"
+            )
+    else:
+        # 兼容旧模型（未保存 feature_cols）：自动选择特征列
+        feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
+                                'change_pct', 'change_amount', 'adj_close'}]
+        if not feature_cols:
+            raise HTTPException(status_code=400, detail="无可用特征列")
 
     df_features = df[feature_cols].copy()
     df_features = (df_features - df_features.mean()) / df_features.std()
@@ -211,17 +254,18 @@ async def predict(
     else:
         expected_feat_dim = input_size
 
+    trained_stocks = user_model.stock_codes or []
     if feature_window <= 1 and model_type not in ['lstm', 'gru']:
         if len(feature_cols) != input_size:
             raise HTTPException(
                 status_code=400,
-                detail=f"特征列数({len(feature_cols)})与模型期望({input_size})不匹配，请确保使用相同配置"
+                detail=f"特征维度不匹配：当前{len(feature_cols)}个特征，模型需要{input_size}个。该模型训练时使用的股票为 {', '.join(trained_stocks)}，请使用这些股票进行预测"
             )
     elif feature_window > 1:
         if len(feature_cols) * feature_window != input_size:
             raise HTTPException(
                 status_code=400,
-                detail=f"特征列数({len(feature_cols)})×窗口({feature_window})={len(feature_cols)*feature_window}与模型期望({input_size})不匹配，请确保使用相同配置"
+                detail=f"特征维度不匹配：{len(feature_cols)}列×{feature_window}窗口={len(feature_cols)*feature_window}，模型需要{input_size}。该模型训练时使用的股票为 {', '.join(trained_stocks)}，请使用这些股票进行预测"
             )
 
     try:
@@ -366,6 +410,13 @@ async def batch_predict(
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    # 尝试从模型检查点加载训练时保存的特征列名
+    try:
+        checkpoint_meta = ModelCheckpoint.load_checkpoint_metadata(task.id)
+        saved_feature_cols = checkpoint_meta.get('feature_cols', []) or []
+    except (FileNotFoundError, Exception):
+        saved_feature_cols = []
+
     model_type = user_model.model_type
     model_config = user_model.model_config or {}
     target = user_model.target
@@ -378,8 +429,39 @@ async def batch_predict(
                 user_model.features, user_model.feature_config or {},
             )
 
-            feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
-                            'change_pct', 'change_amount', 'adj_close'}]
+            if saved_feature_cols:
+                available_cols = set(df.columns)
+                feature_cols = [col for col in saved_feature_cols if col in available_cols]
+                missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+
+                if missing_cols:
+                    try:
+                        data_service.sync_stock_prices(code)
+                        import time as _time; _time.sleep(1)
+                        df = feature_service.calculate_features(
+                            stock_code=code,
+                            indicators=user_model.features,
+                            indicator_params=user_model.feature_config or {},
+                            limit=10000,
+                        )
+                        if df is not None and not df.empty:
+                            available_cols = set(df.columns)
+                            feature_cols = [col for col in saved_feature_cols if col in available_cols]
+                            missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+                    except Exception:
+                        pass
+
+                if missing_cols:
+                    for col in missing_cols:
+                        df[col] = 0.0
+                    feature_cols = saved_feature_cols
+                if len(feature_cols) != len(saved_feature_cols):
+                    trained_stocks = user_model.stock_codes or []
+                    results.append({'stock_code': code, 'error': f'特征不足：模型需要{len(saved_feature_cols)}个，当前{len(feature_cols)}个可用。训练股票: {", ".join(trained_stocks)}'})
+                    continue
+            else:
+                feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
+                                'change_pct', 'change_amount', 'adj_close'}]
             
             dim_ok = True
             if feature_window <= 1 and model_type not in ['lstm', 'gru']:
@@ -390,7 +472,8 @@ async def batch_predict(
                 dim_ok = len(feature_cols) == input_size
             
             if not feature_cols or not dim_ok:
-                results.append({'stock_code': code, 'error': f'特征列数不匹配({len(feature_cols)} vs {input_size}, window={feature_window})'})
+                trained_stocks = user_model.stock_codes or []
+                results.append({'stock_code': code, 'error': f'特征维度不匹配({len(feature_cols)} vs {input_size}, window={feature_window})。训练股票: {", ".join(trained_stocks)}'})
                 continue
 
             df_features = df[feature_cols].copy()

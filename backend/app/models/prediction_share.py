@@ -26,6 +26,7 @@ class PredictionShare(Base):
     prediction_value = Column(Float, nullable=True)
     confidence = Column(Float, nullable=True)
     predicted_change_pct = Column(Float, nullable=True)
+    predicted_price = Column(Float, nullable=True, comment="预测目标价格")
     prediction_data = Column(JSON, nullable=True)
     is_published = Column(Boolean, default=False, index=True)
     likes_count = Column(Integer, default=0)
@@ -46,6 +47,7 @@ class PredictionShare(Base):
             "prediction_value": self.prediction_value,
             "confidence": self.confidence,
             "predicted_change_pct": self.predicted_change_pct,
+            "predicted_price": self.predicted_price,
             "prediction_data": self.prediction_data,
             "is_published": self.is_published,
             "likes_count": self.likes_count,

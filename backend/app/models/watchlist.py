@@ -28,16 +28,18 @@ class Watchlist(Base):
         passive_deletes=True,
     )
 
-    def to_dict(self, stock_count: int = 0):
-        return {
+    def to_dict(self, stock_count: int = 0, stocks: list | None = None):
+        result = {
             "id": self.id,
             "user_id": self.user_id,
             "name": self.name,
             "description": self.description,
             "stock_count": stock_count,
+            "items": stocks if stocks is not None else [],
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
             "updated_at": self.updated_at.strftime("%Y-%m-%d %H:%M:%S") if self.updated_at else None,
         }
+        return result
 
 
 class WatchlistItem(Base):

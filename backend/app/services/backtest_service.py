@@ -106,13 +106,14 @@ class BacktestService:
             user_model = task.user_model
             
             # 加载模型（同时获取input_size和feature_window）
-            model, input_size, feature_window = self._load_model(task)
+            model, input_size, feature_window, saved_feature_cols = self._load_model(task)
             
             # 执行回测（可覆盖股票列表）
             results = self._execute_backtest(
                 model, user_model, backtest,
                 backtest.start_date, backtest.end_date,
                 input_size, feature_window,
+                saved_feature_cols=saved_feature_cols,
                 override_stock_codes=override_stock_codes
             )
             
@@ -146,7 +147,13 @@ class BacktestService:
         """加载训练好的模型（从checkpoint中读取input_size和feature_window）"""
         try:
             model, metrics, input_size, feature_window = ModelCheckpoint.load_checkpoint(task.id)
-            return model, input_size, feature_window
+            # 同时加载训练时保存的特征列名
+            try:
+                checkpoint_meta = ModelCheckpoint.load_checkpoint_metadata(task.id)
+                saved_feature_cols = checkpoint_meta.get('feature_cols', []) or []
+            except (FileNotFoundError, Exception):
+                saved_feature_cols = []
+            return model, input_size, feature_window, saved_feature_cols
         except FileNotFoundError:
             raise FileNotFoundError(f"模型检查点不存在，请先完成模型训练")
     
@@ -155,6 +162,7 @@ class BacktestService:
         start_date: str, end_date: str,
         input_size: int = 0,
         feature_window: int = 1,
+        saved_feature_cols: list = None,
         override_stock_codes: list = None
     ) -> Dict[str, Any]:
         """执行回测逻辑
@@ -165,6 +173,7 @@ class BacktestService:
         Args:
             input_size: 模型期望的特征维度
             feature_window: 特征窗口天数
+            saved_feature_cols: 训练时保存的特征列名列表，用于确保维度一致
             override_stock_codes: 可选，覆盖训练时的股票列表
         """
         # 使用覆盖的股票列表或训练时的股票列表
@@ -215,10 +224,20 @@ class BacktestService:
             if df is None or df.empty:
                 continue
             
-            # 标准化（排除原始价格列、ID和元数据列）
-            exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
-                            'change_pct', 'change_amount', 'adj_close'}
-            feature_cols = [col for col in df.columns if col not in exclude_cols]
+            # 根据训练时保存的特征列名选择特征，确保维度一致
+            if saved_feature_cols:
+                available_cols = set(df.columns)
+                feature_cols = [col for col in saved_feature_cols if col in available_cols]
+                missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+                if missing_cols:
+                    for col in missing_cols:
+                        df[col] = 0.0
+                    feature_cols = saved_feature_cols
+            else:
+                # 兼容旧模型：自动选择特征列
+                exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
+                                'change_pct', 'change_amount', 'adj_close'}
+                feature_cols = [col for col in df.columns if col not in exclude_cols]
             df_features = df[feature_cols].copy()
             df_features = df_features.fillna(0)
             df_features = (df_features - df_features.mean()) / df_features.std()

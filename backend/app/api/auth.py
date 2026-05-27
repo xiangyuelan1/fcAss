@@ -57,7 +57,8 @@ class ChangePasswordRequest(BaseModel):
 
 @router.post("/register", response_model=UserResponse)
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
-    """用户注册"""
+    """用户注册（内测阶段已关闭）"""
+    raise HTTPException(status_code=403, detail="系统当前为内测阶段，暂不开放注册")
     existing_user = db.query(UserModel).filter(
         (UserModel.username == user_data.username) | 
         (UserModel.email == user_data.email)
