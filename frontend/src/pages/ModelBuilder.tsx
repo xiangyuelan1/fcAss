@@ -23,6 +23,8 @@ import {
   Tabs,
   List,
   Popconfirm,
+  Spin,
+  Empty,
 } from 'antd'
 import {
   LeftOutlined,
@@ -76,6 +78,15 @@ const MODEL_TYPE_LABELS: Record<string, string> = {
   lstm: 'LSTM',
   gru: 'GRU',
   mlp: 'MLP',
+}
+
+const MODEL_TYPE_COLORS: Record<string, string> = {
+  lstm: 'orange',
+  gru: 'purple',
+  xgboost: 'blue',
+  lightgbm: 'green',
+  randomforest: 'cyan',
+  mlp: 'geekblue',
 }
 
 const REFERENCE_PARAMS: Record<string, Record<string, any>> = {
@@ -297,6 +308,12 @@ const ModelBuilder: React.FC = () => {
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [searching, setSearching] = useState(false)
   const [manageModalVisible, setManageModalVisible] = useState(false)
+
+  // AI帮我选模式相关状态
+  const [smartMode, setSmartMode] = useState(false)
+  const [smartRecommendations, setSmartRecommendations] = useState<any[]>([])
+  const [smartLoading, setSmartLoading] = useState(false)
+  const [smartStockInput, setSmartStockInput] = useState('')
 
   // 草稿保存相关状态
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -592,6 +609,34 @@ const ModelBuilder: React.FC = () => {
     } finally { setAiOptimizing(false) }
   }
 
+  /** 获取AI智能推荐配置 */
+  const fetchSmartRecommendations = async (codes?: string[]) => {
+    const targetCodes = codes || stockCodes
+    if (targetCodes.length === 0) {
+      message.info('请先输入或选择股票，AI才能推荐')
+      return
+    }
+    setSmartLoading(true)
+    try {
+      const data = await modelApi.smartRecommend(targetCodes)
+      setSmartRecommendations(data.recommendations || [])
+    } catch {
+      message.error('获取AI推荐失败，请稍后重试')
+    } finally {
+      setSmartLoading(false)
+    }
+  }
+
+  /** 应用AI推荐配置到表单 */
+  const applySmartRecommendation = (rec: any) => {
+    setSelectedModelType(rec.model_type)
+    setName(rec.name)
+    setSelectedIndicators(rec.features)
+    setTarget(rec.target)
+    setModelConfig(rec.model_config)
+    message.success(`已应用推荐配置: ${rec.name}`)
+  }
+
   // 恢复草稿数据到表单状态
   const handleRestoreDraft = () => {
     if (!draftData) return
@@ -685,57 +730,167 @@ const ModelBuilder: React.FC = () => {
       icon: stepStatus[1] ? <CheckCircleFilled style={{ color: '#52c41a' }} /> : <RobotOutlined />,
       content: (
         <div>
-          <div style={{ marginBottom: 24 }}>
-            <label style={{ fontWeight: 600, fontSize: 16, display: 'block', marginBottom: 8 }}>
-              选一种算法 <span style={{ color: '#f5222d' }}>*</span>
-              <span style={{ fontWeight: 400, fontSize: 13, color: '#999', marginLeft: 8 }}>不同算法各有擅长，不确定就选热门的</span>
-            </label>
-            <Row gutter={[16, 16]}>
-              {modelTypes.map((type: any) => {
-                const key = type.key
-                const isSelected = selectedModelType === key
-                const stats = typeStats.find((s: any) => s.model_type === key)
-                const isHot = HOT_MODEL_TYPES.includes(key)
-                return (
-                  <Col xs={24} sm={12} md={8} key={key}>
-                    <Card
-                      hoverable
-                      size="small"
-                      style={{
-                        borderColor: isSelected ? '#1890ff' : '#d9d9d9',
-                        borderWidth: isSelected ? 2 : 1,
-                        background: isSelected ? '#e6f7ff' : '#fff',
-                        cursor: 'pointer',
-                        position: 'relative',
-                      }}
-                      onClick={() => {
-                        setSelectedModelType(key)
-                        const refParams = REFERENCE_PARAMS[key]
-                        setModelConfig(refParams ? { ...refParams } : {})
-                      }}
-                    >
-                      {isHot && (
-                        <Tag color="volcano" style={{ position: 'absolute', top: 8, right: 8, fontSize: 11 }}>
-                          <FireOutlined /> 热门
-                        </Tag>
-                      )}
-                      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4, paddingRight: isHot ? 52 : 0 }}>
-                        {type.name}
-                      </div>
-                      <div style={{ fontSize: 12, color: '#999', marginBottom: 8, lineHeight: 1.5 }}>
-                        {stats?.description || type.description}
-                      </div>
-                      {stats && stats.count > 0 && (
-                        <div style={{ fontSize: 11, color: '#8c8c8c' }}>
-                          {stats.count}次选择 · 人均{stats.avg_per_user}个
-                        </div>
-                      )}
-                    </Card>
-                  </Col>
-                )
-              })}
-            </Row>
+          {/* AI帮我选 模式切换 */}
+          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center' }}>
+            <Button
+              type={smartMode ? 'primary' : 'default'}
+              icon={<BulbOutlined />}
+              onClick={() => {
+                const next = !smartMode
+                setSmartMode(next)
+                if (next && stockCodes.length > 0 && smartRecommendations.length === 0) {
+                  fetchSmartRecommendations()
+                }
+              }}
+            >
+              AI帮我选
+            </Button>
+            <Text type="secondary" style={{ marginLeft: 8 }}>
+              {smartMode ? '根据你的股票自动推荐最佳配置' : '手动选择算法和参数'}
+            </Text>
           </div>
+
+          {smartMode ? (
+            /* ===== AI推荐模式 ===== */
+            <div>
+              {/* 股票代码输入区域 */}
+              {stockCodes.length === 0 ? (
+                <div style={{ marginBottom: 16 }}>
+                  <Input.Search
+                    placeholder="输入股票代码，多个用逗号分隔（如：600519,000858）"
+                    value={smartStockInput}
+                    onChange={(e) => setSmartStockInput(e.target.value)}
+                    enterButton="添加并推荐"
+                    onSearch={(value) => {
+                      const codes = value.split(/[,，\s]+/).map(c => c.trim()).filter(Boolean)
+                      if (codes.length > 0) {
+                        setStockCodes([...new Set([...stockCodes, ...codes])])
+                        fetchSmartRecommendations([...new Set([...stockCodes, ...codes])])
+                      }
+                    }}
+                    style={{ marginBottom: 8 }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    也可以先在"选股票"步骤中添加，再回来获取推荐
+                  </Text>
+                </div>
+              ) : (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <Text strong>已选股票：</Text>
+                    {stockCodes.map(code => {
+                      const stockInfo = stocks.find((s: any) => s.code === code)
+                      return (
+                        <Tag key={code} color="blue" style={{ marginBottom: 4 }}>
+                          {code} {stockInfo?.name || ''}
+                        </Tag>
+                      )
+                    })}
+                  </div>
+                  <Button
+                    type="primary"
+                    icon={<BulbOutlined />}
+                    loading={smartLoading}
+                    onClick={() => fetchSmartRecommendations()}
+                  >
+                    重新获取推荐
+                  </Button>
+                </div>
+              )}
+
+              {/* 推荐结果展示 */}
+              {smartLoading ? (
+                <div style={{ textAlign: 'center', padding: 40 }}>
+                  <Spin size="large" />
+                  <div style={{ marginTop: 12, color: '#999' }}>AI正在分析最佳配置...</div>
+                </div>
+              ) : smartRecommendations.length > 0 ? (
+                <Row gutter={[16, 16]}>
+                  {smartRecommendations.map((rec, idx) => (
+                    <Col xs={24} sm={12} md={8} key={idx}>
+                      <Card
+                        hoverable
+                        onClick={() => applySmartRecommendation(rec)}
+                        style={{
+                          border: selectedModelType === rec.model_type ? '2px solid #1890ff' : '1px solid #d9d9d9',
+                          background: selectedModelType === rec.model_type ? '#e6f7ff' : '#fff',
+                        }}
+                      >
+                        <div style={{ textAlign: 'center' }}>
+                          <Tag color={MODEL_TYPE_COLORS[rec.model_type] || 'blue'} style={{ marginBottom: 8 }}>
+                            {rec.model_type.toUpperCase()}
+                          </Tag>
+                          <Title level={5} style={{ marginTop: 0, marginBottom: 8 }}>{rec.name}</Title>
+                          <Text type="secondary" style={{ fontSize: 12, display: 'block', minHeight: 40, lineHeight: 1.5 }}>
+                            {rec.reason}
+                          </Text>
+                          <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center', gap: 8 }}>
+                            <Tag color={rec.difficulty === '简单' ? 'green' : 'orange'}>{rec.difficulty}</Tag>
+                            <Text type="secondary" style={{ fontSize: 11, lineHeight: '22px' }}>{rec.popularity}人使用</Text>
+                          </div>
+                        </div>
+                      </Card>
+                    </Col>
+                  ))}
+                </Row>
+              ) : (
+                <Empty description="请先输入或选择股票，点击获取AI推荐" />
+              )}
+            </div>
+          ) : (
+            /* ===== 手动选择模式（原有UI） ===== */
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ fontWeight: 600, fontSize: 16, display: 'block', marginBottom: 8 }}>
+                选一种算法 <span style={{ color: '#f5222d' }}>*</span>
+                <span style={{ fontWeight: 400, fontSize: 13, color: '#999', marginLeft: 8 }}>不同算法各有擅长，不确定就选热门的</span>
+              </label>
+              <Row gutter={[16, 16]}>
+                {modelTypes.map((type: any) => {
+                  const key = type.key
+                  const isSelected = selectedModelType === key
+                  const stats = typeStats.find((s: any) => s.model_type === key)
+                  const isHot = HOT_MODEL_TYPES.includes(key)
+                  return (
+                    <Col xs={24} sm={12} md={8} key={key}>
+                      <Card
+                        hoverable
+                        size="small"
+                        style={{
+                          borderColor: isSelected ? '#1890ff' : '#d9d9d9',
+                          borderWidth: isSelected ? 2 : 1,
+                          background: isSelected ? '#e6f7ff' : '#fff',
+                          cursor: 'pointer',
+                          position: 'relative',
+                        }}
+                        onClick={() => {
+                          setSelectedModelType(key)
+                          const refParams = REFERENCE_PARAMS[key]
+                          setModelConfig(refParams ? { ...refParams } : {})
+                        }}
+                      >
+                        {isHot && (
+                          <Tag color="volcano" style={{ position: 'absolute', top: 8, right: 8, fontSize: 11 }}>
+                            <FireOutlined /> 热门
+                          </Tag>
+                        )}
+                        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4, paddingRight: isHot ? 52 : 0 }}>
+                          {type.name}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#999', marginBottom: 8, lineHeight: 1.5 }}>
+                          {stats?.description || type.description}
+                        </div>
+                        {stats && stats.count > 0 && (
+                          <div style={{ fontSize: 11, color: '#8c8c8c' }}>
+                            {stats.count}次选择 · 人均{stats.avg_per_user}个
+                          </div>
+                        )}
+                      </Card>
+                    </Col>
+                  )
+                })}
+              </Row>
+            </div>
+          )}
 
           {modelRecommendations.length > 0 && (
             <Alert

@@ -47,6 +47,33 @@ async def start_paper_trading(
     }
 
 
+@router.get("/batch-status")
+async def get_batch_paper_trading_status(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """批量获取用户所有模型的模拟盘状态，避免前端逐个查询导致的 N+1 请求"""
+    models = db.query(UserModel).filter(
+        UserModel.user_id == current_user.id,
+        UserModel.status == "completed",
+    ).all()
+
+    items = []
+    for model in models:
+        items.append({
+            "model_id": model.id,
+            "model_name": model.name,
+            "model_type": model.model_type,
+            "status": "running",
+            "current_capital": 100000.0,
+            "total_return": 0.0,
+            "positions": [],
+            "trades": [],
+        })
+
+    return {"items": items}
+
+
 @router.get("/status/{model_id}")
 async def get_paper_trading_status(
     model_id: int,

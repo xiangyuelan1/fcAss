@@ -2,7 +2,6 @@
 FastAPI应用主入口
 """
 import asyncio
-from datetime import datetime, timedelta
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +23,8 @@ from app.models.daily_guess import DailyGuessStock, DailyGuessVote
 from app.models.community import CommunityModel, CommunitySignal
 from app.api import api_router
 from app.auth import get_password_hash
-import logging
+from app.services.auto_predict_service import auto_predict_community_models
+from app.services.market_pusher import market_data_pusher
 
 
 class ConnectionManager:
@@ -53,71 +53,6 @@ class ConnectionManager:
 
 
 ws_manager = ConnectionManager()
-
-
-async def market_data_pusher():
-    """后台任务：每30秒推送热门股票+用户自选股最新行情到所有WebSocket客户端"""
-    while True:
-        try:
-            db = SessionLocal()
-            try:
-                from app.services.data_service import DataService
-                from app.models.watchlist import WatchlistItem
-                ds = DataService(db)
-                hot_stocks = []
-                try:
-                    from app.models.system_config import SystemConfig
-                    cfg = db.query(SystemConfig).filter(
-                        SystemConfig.key == 'hot_stocks',
-                        SystemConfig.is_active == True,
-                    ).first()
-                    if cfg and cfg.value:
-                        hot_stocks = [c.strip() for c in cfg.value.split(',') if c.strip()]
-                except Exception:
-                    pass
-                watchlist_codes = set()
-                try:
-                    items = db.query(WatchlistItem.stock_code).distinct().all()
-                    watchlist_codes = {item[0] for item in items if item[0]}
-                except Exception:
-                    pass
-                all_codes = list(dict.fromkeys(hot_stocks + list(watchlist_codes)))[:50]
-                quotes = []
-                try:
-                    from app.services.data_fetcher import DataFetcher
-                    rt_quotes = DataFetcher.get_realtime_quote(all_codes)
-                    for code, q in rt_quotes.items():
-                        quotes.append({
-                            'code': code,
-                            'close': q.get('close', 0),
-                            'price': q.get('price', q.get('close', 0)),
-                            'change_pct': q.get('change_pct', q.get('change_percent', 0)),
-                            'volume': q.get('volume', 0),
-                            'open': q.get('open', 0),
-                            'high': q.get('high', 0),
-                            'low': q.get('low', 0),
-                        })
-                except Exception:
-                    for code in all_codes:
-                        try:
-                            prices = ds.get_stock_prices(code, limit=1)
-                            if prices:
-                                p = prices[-1]
-                                quotes.append({
-                                    'code': code,
-                                    'close': float(p.close) if p.close else 0,
-                                    'change_pct': float(p.change_pct) if p.change_pct else 0,
-                                    'volume': int(p.volume) if p.volume else 0,
-                                })
-                        except Exception:
-                            continue
-                if quotes:
-                    await ws_manager.broadcast({'type': 'market', 'data': quotes})
-            finally:
-                db.close()
-        except Exception:
-            pass
-        await asyncio.sleep(30)
 
 
 def _ensure_default_admin():
@@ -152,6 +87,8 @@ def _ensure_default_admin():
 
 def _ensure_test_users():
     """确保内测用户存在（testuser1 ~ testuser20，密码均为 123456）"""
+    if not settings.DEBUG:
+        return
     db = SessionLocal()
     try:
         for i in range(1, 21):
@@ -194,212 +131,95 @@ def _sync_stock_pool_on_startup():
         db.close()
 
 
-def _compute_badges(total: int, correct: int, current_streak: int, best_streak: int) -> list[str]:
-    """根据预测战绩计算称号列表"""
-    badges: list[str] = []
-    accuracy = correct / total if total > 0 else 0.0
+def _ensure_seed_data():
+    """确保种子数据存在，让新用户开箱即用
 
-    if current_streak >= 7:
-        badges.append("七日连胜 🏆")
-    elif current_streak >= 5:
-        badges.append("五连绝世 ⚡")
-    elif current_streak >= 3:
-        badges.append("连中三元 🔥")
-
-    if total >= 10:
-        if accuracy >= 0.8:
-            badges.append("预言大师 👑")
-        elif accuracy >= 0.7:
-            badges.append("精准猎手 🎯")
-        if accuracy < 0.3:
-            badges.append("反向指标 🔄")
-
-    if total >= 100:
-        badges.append("百战老兵 💎")
-    elif total >= 30:
-        badges.append("资深预测 📊")
-
-    return badges
-
-
-async def auto_predict_community_models():
-    """后台任务：每日自动为社区模型执行预测并更新战绩
-
-    首次启动延迟5分钟执行，之后每24小时执行一次。
-    对每个开启自动预测的活跃社区模型，取其关联股票的前3只进行预测，
-    同时回溯前一天预测与实际涨跌对比，更新正确/错误统计和称号。
+    首次启动时自动获取3只热门股票的历史数据，
+    并为admin用户创建2个Demo模型，引导新用户快速体验。
+    仅在数据库中无任何股票数据时执行，避免重复初始化。
     """
-    logger = logging.getLogger(__name__)
-    await asyncio.sleep(300)
+    db = SessionLocal()
+    try:
+        # 已有股票数据则跳过，说明非首次启动
+        stock_count = db.query(Stock).count()
+        if stock_count > 0:
+            print("[OK] 种子数据已存在，跳过初始化")
+            return
 
-    while True:
-        db = SessionLocal()
-        try:
-            models = db.query(CommunityModel).filter(
-                CommunityModel.auto_predict == True,
-                CommunityModel.is_active == True,
-            ).all()
+        print("[启动] 正在初始化种子数据...")
+        from app.services.data_service import DataService
+        service = DataService(db)
 
-            today_str = datetime.now().strftime("%Y-%m-%d")
+        # 获取3只热门股票数据（数据量大、知名度高，适合作为Demo）
+        seed_stocks = [
+            ('600519', '贵州茅台'),
+            ('000001', '平安银行'),
+            ('002594', '比亚迪'),
+        ]
+        for code, name in seed_stocks:
+            try:
+                result = service.fetch_stock_data(code)
+                count = result.get('price_count', 0)
+                print(f"  [种子] {name}({code}): 获取{count}条数据")
+            except Exception as e:
+                print(f"  [种子] {name}({code}): 获取失败({e})，跳过")
 
-            for cm in models:
-                try:
-                    latest_task = db.query(TrainingTask).filter(
-                        TrainingTask.model_id == cm.source_model_id,
-                        TrainingTask.status == 'completed',
-                    ).order_by(TrainingTask.created_at.desc()).first()
+        # 为admin用户创建2个Demo模型（状态为draft，引导用户自己训练）
+        admin = db.query(User).filter(User.username == 'admin').first()
+        if admin:
+            # 检查是否已有Demo模型，避免重复创建
+            existing_demos = db.query(UserModel).filter(
+                UserModel.name.like('[Demo]%')
+            ).count()
 
-                    if not latest_task:
-                        continue
+            if existing_demos == 0:
+                demo_models = [
+                    UserModel(
+                        user_id=admin.id,
+                        name='[Demo] 茅台趋势预测(LSTM)',
+                        model_type='lstm',
+                        model_config={
+                            'hidden_size': 64,
+                            'num_layers': 2,
+                            'dropout': 0.2,
+                            'learning_rate': 0.001,
+                            'epochs': 50,
+                            'batch_size': 32,
+                            'sequence_length': 20,
+                        },
+                        features=['ma', 'macd', 'rsi', 'boll'],
+                        feature_config={},
+                        target='next_day_return',
+                        stock_codes=['600519'],
+                        status='draft',
+                    ),
+                    UserModel(
+                        user_id=admin.id,
+                        name='[Demo] 银行股方向判断(XGBoost)',
+                        model_type='xgboost',
+                        model_config={
+                            'n_estimators': 100,
+                            'max_depth': 5,
+                            'learning_rate': 0.1,
+                        },
+                        features=['ma', 'macd', 'rsi', 'boll', 'kdj'],
+                        feature_config={},
+                        target='next_day_direction',
+                        stock_codes=['000001'],
+                        status='draft',
+                    ),
+                ]
+                for model in demo_models:
+                    db.add(model)
+                db.commit()
+                print(f"  [种子] 已创建{len(demo_models)}个Demo模型")
 
-                    from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
-                    try:
-                        model, metrics, input_size, feature_window = ModelCheckpoint.load_checkpoint(latest_task.id)
-                    except (FileNotFoundError, ValueError):
-                        continue
-
-                    from app.services.feature_service import FeatureService
-                    from app.services.data_service import DataService
-                    from app.api.prediction import _do_predict, _prediction_to_label
-
-                    feature_service = FeatureService(db)
-                    data_service = DataService(db)
-
-                    stock_codes = cm.stock_codes or []
-                    predict_codes = stock_codes[:3]
-
-                    record = cm.prediction_record or {}
-                    daily_records = record.get("daily_records", [])
-
-                    # 回溯前一天预测，对比实际涨跌
-                    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-                    updated = False
-                    for dr in daily_records:
-                        if dr.get("date") == yesterday_str and dr.get("actual") is None:
-                            try:
-                                prices = data_service.get_stock_prices(dr["stock_code"], limit=2)
-                                if prices and len(prices) >= 2:
-                                    change_pct = float(prices[-1].change_pct) if prices[-1].change_pct else 0.0
-                                    actual = "up" if change_pct > 0 else ("down" if change_pct < 0 else "flat")
-                                    dr["actual"] = actual
-                                    dr["correct"] = (dr["direction"] == actual)
-                                    updated = True
-                            except Exception:
-                                pass
-
-                    # 重新计算统计
-                    if updated:
-                        verified = [dr for dr in daily_records if dr.get("actual") is not None]
-                        total_p = len(verified)
-                        correct_p = sum(1 for dr in verified if dr.get("correct") is True)
-                        accuracy = round(correct_p / total_p, 3) if total_p > 0 else 0.0
-
-                        # 计算连胜
-                        current_streak = 0
-                        best_streak = 0
-                        streak = 0
-                        for dr in reversed(verified):
-                            if dr.get("correct") is True:
-                                streak += 1
-                                best_streak = max(best_streak, streak)
-                            else:
-                                if current_streak == 0:
-                                    current_streak = streak
-                                streak = 0
-                        if current_streak == 0 and streak > 0:
-                            current_streak = streak
-
-                        record["total_predictions"] = total_p
-                        record["correct_predictions"] = correct_p
-                        record["accuracy"] = accuracy
-                        record["current_streak"] = current_streak
-                        record["best_streak"] = best_streak
-                        record["badges"] = _compute_badges(total_p, correct_p, current_streak, best_streak)
-
-                    # 执行今日预测
-                    for code in predict_codes:
-                        existing_today = any(
-                            dr.get("date") == today_str and dr.get("stock_code") == code
-                            for dr in daily_records
-                        )
-                        if existing_today:
-                            continue
-
-                        try:
-                            stock_info = data_service.get_stock_by_code(code)
-                            if not stock_info:
-                                data_service.fetch_stock_data(code)
-
-                            df = feature_service.calculate_features(
-                                stock_code=code,
-                                indicators=cm.features,
-                                indicator_params=cm.feature_config or {},
-                                limit=5000,
-                            )
-                            if df is None or df.empty:
-                                continue
-
-                            exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
-                                            'change_pct', 'change_amount', 'adj_close'}
-                            feature_cols = [col for col in df.columns if col not in exclude_cols]
-                            if not feature_cols:
-                                continue
-
-                            if feature_window > 1:
-                                if len(feature_cols) * feature_window != input_size:
-                                    continue
-                            else:
-                                if len(feature_cols) != input_size:
-                                    continue
-
-                            df_features = df[feature_cols].copy()
-                            df_features = (df_features - df_features.mean()) / df_features.std()
-
-                            prediction = _do_predict(model, cm.model_type, cm.model_config, df_features, input_size, feature_window)
-                            direction = _prediction_to_label(prediction, cm.target)
-
-                            # 写入 CommunitySignal
-                            signal = CommunitySignal(
-                                user_id=cm.user_id,
-                                community_model_id=cm.id,
-                                stock_code=code,
-                                direction=direction,
-                                prediction_value=round(float(prediction), 4),
-                                prediction_date=today_str,
-                            )
-                            db.add(signal)
-
-                            # 写入 daily_records
-                            daily_records.insert(0, {
-                                "date": today_str,
-                                "stock_code": code,
-                                "direction": direction,
-                                "actual": None,
-                                "correct": None,
-                            })
-
-                        except Exception as e:
-                            logger.warning(f"[自动预测] 模型{cm.id} 股票{code} 预测失败: {e}")
-                            continue
-
-                    # 更新 total_predictions（包含未验证的）
-                    record["daily_records"] = daily_records
-                    record["total_predictions"] = len(daily_records)
-                    cm.prediction_record = record
-
-                except Exception as e:
-                    logger.warning(f"[自动预测] 模型{cm.id} 处理失败: {e}")
-                    continue
-
-            db.commit()
-            logger.info(f"[自动预测] 完成，处理了 {len(models)} 个社区模型")
-        except Exception as e:
-            logger.error(f"[自动预测] 执行异常: {e}")
-            db.rollback()
-        finally:
-            db.close()
-
-        await asyncio.sleep(86400)
+        print("[OK] 种子数据初始化完成")
+    except Exception as e:
+        db.rollback()
+        print(f"[WARN] 种子数据初始化失败: {e}")
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -407,6 +227,15 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     setup_logging()
     print(f"[启动] {settings.APP_NAME} v{settings.APP_VERSION}")
+
+    # 创建必要目录
+    os.makedirs(settings.DATA_DIR, exist_ok=True)
+    os.makedirs(settings.MODEL_DIR, exist_ok=True)
+    os.makedirs(settings.LOG_DIR, exist_ok=True)
+
+    # 生产环境配置校验
+    settings.validate_production()
+
     init_db()
     print("[OK] 数据库初始化完成")
     _migrate_db()
@@ -428,7 +257,13 @@ async def _background_startup_tasks():
     except Exception as e:
         print(f"[WARN] 股票池同步失败: {e}")
 
-    asyncio.create_task(market_data_pusher())
+    # 种子数据初始化（在股票池同步之后执行）
+    try:
+        _ensure_seed_data()
+    except Exception as e:
+        print(f"[WARN] 种子数据初始化失败: {e}")
+
+    asyncio.create_task(market_data_pusher(ws_manager))
     asyncio.create_task(auto_predict_community_models())
 
 
@@ -443,9 +278,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
 
+    cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+    if settings.DEBUG:
+        cors_origins.append("*")
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

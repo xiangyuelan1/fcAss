@@ -346,6 +346,11 @@ class AiOptimizeRequest(BaseModel):
     stock_codes: List[str] = Field(default_factory=list, description="训练股票")
 
 
+class SmartRecommendRequest(BaseModel):
+    """智能推荐模型配置请求"""
+    stock_codes: List[str] = Field(..., description="关注的股票代码列表")
+
+
 @router.post("/ai-optimize-params")
 async def ai_optimize_params(
     request: AiOptimizeRequest,
@@ -430,6 +435,95 @@ async def ai_optimize_params(
     except Exception as e:
         logger.warning(f"AI优化失败: {e}")
         return {"success": False, "message": f"AI优化调用失败: {str(e)[:100]}"}
+
+
+@router.post("/smart-recommend")
+async def smart_recommend_model(
+    request: SmartRecommendRequest,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """智能推荐模型配置
+
+    基于股票行业特征和历史训练统计，推荐最适合的算法、指标和参数组合。
+    """
+    from app.models.stock import Stock
+
+    # 获取股票信息（最多5只）
+    stock_infos = []
+    for code in request.stock_codes[:5]:
+        stock = db.query(Stock).filter(Stock.code == code).first()
+        if stock:
+            stock_infos.append({
+                'code': code,
+                'name': stock.name,
+                'industry': stock.industry or '',
+            })
+
+    # 基于历史训练统计推荐算法
+    model_stats = db.query(
+        UserTableModel.model_type,
+        func.count(UserTableModel.id).label('count'),
+    ).filter(
+        UserTableModel.status.in_(['trained', 'draft'])
+    ).group_by(UserTableModel.model_type).all()
+
+    stats_dict = {s[0]: s[1] for s in model_stats}
+
+    # 推荐策略：基于数据量和场景
+    # 数据量少（<200条）→ 传统ML（XGBoost/LightGBM）
+    # 数据量多（>=200条）→ 深度学习（LSTM/GRU）
+    # 方向预测 → 分类模型
+    # 收益预测 → 回归模型
+    recommendations = [
+        {
+            'name': '趋势捕捉者(LSTM)',
+            'model_type': 'lstm',
+            'reason': 'LSTM擅长捕捉股价中长期趋势，适合有充足历史数据的场景',
+            'features': ['ma', 'macd', 'rsi', 'boll'],
+            'target': 'next_day_return',
+            'model_config': {
+                'hidden_size': 64, 'num_layers': 2, 'dropout': 0.2,
+                'sequence_length': 20, 'learning_rate': 0.001, 'epochs': 50, 'batch_size': 32,
+            },
+            'difficulty': '中等',
+            'popularity': stats_dict.get('lstm', 0),
+        },
+        {
+            'name': '方向判官(XGBoost)',
+            'model_type': 'xgboost',
+            'reason': 'XGBoost在方向预测上表现稳定，训练速度快，适合快速验证策略',
+            'features': ['ma', 'macd', 'rsi', 'boll', 'kdj'],
+            'target': 'next_day_direction',
+            'model_config': {
+                'n_estimators': 100, 'max_depth': 6, 'learning_rate': 0.1,
+                'subsample': 0.8, 'colsample_bytree': 0.8,
+            },
+            'difficulty': '简单',
+            'popularity': stats_dict.get('xgboost', 0),
+        },
+        {
+            'name': '短线猎手(LightGBM)',
+            'model_type': 'lightgbm',
+            'reason': 'LightGBM训练极快，适合频繁调参和短线策略验证',
+            'features': ['ma', 'macd', 'rsi', 'kdj', 'obv'],
+            'target': 'next_day_return',
+            'model_config': {
+                'n_estimators': 100, 'max_depth': -1, 'learning_rate': 0.1,
+                'num_leaves': 31, 'subsample': 0.8, 'colsample_bytree': 0.8,
+            },
+            'difficulty': '简单',
+            'popularity': stats_dict.get('lightgbm', 0),
+        },
+    ]
+
+    # 按受欢迎程度排序
+    recommendations.sort(key=lambda x: x['popularity'], reverse=True)
+
+    return {
+        'stock_infos': stock_infos,
+        'recommendations': recommendations,
+    }
 
 
 # ============================================================

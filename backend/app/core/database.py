@@ -52,6 +52,9 @@ def drop_db():
 # 需要检查的迁移列定义
 # 格式: {表名: [(列名, 列类型SQL), ...]}
 _MIGRATION_COLUMNS = {
+    "training_tasks": [
+        ("progress", "JSON"),
+    ],
     "users": [
         ("last_login_at", "DATETIME"),
         ("last_login_ip", "VARCHAR(45)"),
@@ -78,6 +81,9 @@ _MIGRATION_COLUMNS = {
     "payment_config": [
         ("register_fee", "DECIMAL(10,2) DEFAULT 1.00"),
         ("pay_type", "VARCHAR(20) DEFAULT 'alipay'"),
+    ],
+    "training_tasks": [
+        ("progress", "JSON"),
     ],
 }
 

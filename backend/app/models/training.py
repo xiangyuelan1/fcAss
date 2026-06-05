@@ -27,6 +27,7 @@ class TrainingTask(Base):
     # 训练结果
     metrics = Column(JSON, comment="评估指标")
     model_path = Column(String(255), comment="模型文件路径")
+    progress = Column(JSON, comment="训练进度（持久化缓存，支持进程重启后恢复）")
     
     # 错误信息
     error_message = Column(Text, comment="错误信息")

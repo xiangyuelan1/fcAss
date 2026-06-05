@@ -226,6 +226,9 @@ export const modelApi = {
 
   getRandomStock: () =>
     api.get('/models/random-stock'),
+
+  smartRecommend: (stockCodes: string[]) =>
+    api.post('/models/smart-recommend', { stock_codes: stockCodes }).then(res => res.data),
 };
 
 // 训练任务API
@@ -355,6 +358,14 @@ export const predictionApi = {
   // 策略回放
   getStrategyReplay: (modelId: number, days?: number) =>
     api.get(`/prediction/replay/${modelId}`, { params: { days } }),
+
+  // 预测准确率统计
+  getAccuracy: (days: number = 30) =>
+    api.get(`/prediction/accuracy?days=${days}`).then(res => res.data),
+
+  // 预测验证日报
+  getDailyReport: () =>
+    api.get('/prediction/daily-report').then(res => res.data),
 };
 
 // 认证API
@@ -588,6 +599,8 @@ export const paperTradingApi = {
   }) => api.post('/paper-trading/start', data),
   getPaperTradingStatus: (modelId: number) =>
     api.get(`/paper-trading/status/${modelId}`),
+  getBatchStatus: () =>
+    api.get('/paper-trading/batch-status'),
 };
 
 export default api;

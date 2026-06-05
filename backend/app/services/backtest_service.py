@@ -181,6 +181,22 @@ class BacktestService:
         
         initial_capital = float(backtest.initial_capital)
         
+        # 回测真实性参数（可从 backtest config 中读取，此处为默认值）
+        backtest_config = getattr(backtest, 'config', None) or {}
+        commission_rate = backtest_config.get('commission_rate', 0.0003)   # 手续费率（万三）
+        slippage_pct = backtest_config.get('slippage_pct', 0.001)         # 滑点百分比（0.1%）
+        limit_price_check = backtest_config.get('limit_price_check', True) # 是否检查涨跌停
+        
+        # 尝试加载训练时保存的标准化参数，避免数据泄露
+        scaler_params = None
+        try:
+            task = backtest.training_task
+            if task:
+                checkpoint_meta = ModelCheckpoint.load_checkpoint_metadata(task.id)
+                scaler_params = checkpoint_meta.get('scaler_params')
+        except (FileNotFoundError, Exception):
+            pass
+        
         # 每只股票独立分配资金
         per_stock_capital = initial_capital / len(stock_codes) if stock_codes else initial_capital
         
@@ -240,7 +256,16 @@ class BacktestService:
                 feature_cols = [col for col in df.columns if col not in exclude_cols]
             df_features = df[feature_cols].copy()
             df_features = df_features.fillna(0)
-            df_features = (df_features - df_features.mean()) / df_features.std()
+            # 标准化：优先使用训练集的统计量，避免数据泄露
+            if scaler_params and scaler_params.get('mean') is not None:
+                feature_mean = np.array(scaler_params['mean'])
+                feature_std = np.array(scaler_params['std'])
+                # 防止除零：标准差过小时置为1.0
+                feature_std = np.where(feature_std < 1e-8, 1.0, feature_std)
+                df_features = (df_features - feature_mean) / feature_std
+            else:
+                # 降级：使用全量数据标准化（存在数据泄露风险）
+                df_features = (df_features - df_features.mean()) / df_features.std()
             
             # 该股票的独立回测状态
             stock_capital = per_stock_capital
@@ -293,36 +318,72 @@ class BacktestService:
                     prediction = 0
                 
                 # 交易逻辑
-                if stock_position == 0 and prediction > 0.001:  # 买入信号
-                    shares = int(stock_capital * 0.95 / current_price)
-                    if shares > 0:
-                        cost = shares * current_price * (1 + 0.0003)
-                        if cost <= stock_capital:
-                            stock_position = shares
-                            stock_capital -= cost
-                            stock_trades.append({
-                                'date': date,
-                                'type': 'buy',
-                                'price': float(current_price),
-                                'shares': shares,
-                                'amount': float(cost),
-                                'stock_code': code,
-                            })
-                
-                elif stock_position > 0 and prediction < -0.001:  # 卖出信号
-                    revenue = stock_position * current_price * (1 - 0.0003)
-                    stock_capital += revenue
+                # 买入信号
+                if stock_position == 0 and prediction > 0.001:
+                    # 涨停检查：当日涨幅超过9.9%则无法买入（ST股4.9%）
+                    can_buy = True
+                    if limit_price_check and 'change_pct' in df.columns:
+                        change_pct = float(df['change_pct'].iloc[i])
+                        # ST股代码以0开头（深圳）或6开头但名称含ST，简化处理：统一9.9%阈值
+                        if change_pct >= 9.9:
+                            can_buy = False
                     
-                    stock_trades.append({
-                        'date': date,
-                        'type': 'sell',
-                        'price': float(current_price),
-                        'shares': stock_position,
-                        'amount': float(revenue),
-                        'pnl': float(revenue - stock_trades[-1]['amount']) if stock_trades and stock_trades[-1]['type'] == 'buy' else 0,
-                        'stock_code': code,
-                    })
-                    stock_position = 0
+                    if can_buy:
+                        # 买入滑点：实际成交价 = 当前价 * (1 + slippage_pct)
+                        actual_buy_price = current_price * (1 + slippage_pct)
+                        # 可买股数：扣除手续费后的可用资金
+                        shares = int(stock_capital * 0.95 / actual_buy_price / (1 + commission_rate))
+                        if shares > 0:
+                            cost = shares * actual_buy_price * (1 + commission_rate)
+                            if cost <= stock_capital:
+                                stock_position = shares
+                                stock_capital -= cost
+                                stock_trades.append({
+                                    'date': date,
+                                    'type': 'buy',
+                                    'price': float(actual_buy_price),
+                                    'shares': shares,
+                                    'amount': float(cost),
+                                    'commission': float(shares * actual_buy_price * commission_rate),
+                                    'slippage': float(shares * current_price * slippage_pct),
+                                    'stock_code': code,
+                                })
+                
+                # 卖出信号
+                elif stock_position > 0 and prediction < -0.001:
+                    # 跌停检查：当日跌幅超过9.9%则无法卖出（ST股4.9%）
+                    can_sell = True
+                    if limit_price_check and 'change_pct' in df.columns:
+                        change_pct = float(df['change_pct'].iloc[i])
+                        if change_pct <= -9.9:
+                            can_sell = False
+                    
+                    if can_sell:
+                        # 卖出滑点：实际成交价 = 当前价 * (1 - slippage_pct)
+                        actual_sell_price = current_price * (1 - slippage_pct)
+                        # 卖出收入：扣除手续费
+                        revenue = stock_position * actual_sell_price * (1 - commission_rate)
+                        stock_capital += revenue
+                        
+                        # 计算盈亏：查找最近一次该股票的买入成本
+                        buy_cost = 0
+                        for t in reversed(stock_trades):
+                            if t['type'] == 'buy' and t.get('stock_code') == code:
+                                buy_cost = t['amount']
+                                break
+                        
+                        stock_trades.append({
+                            'date': date,
+                            'type': 'sell',
+                            'price': float(actual_sell_price),
+                            'shares': stock_position,
+                            'amount': float(revenue),
+                            'pnl': float(revenue - buy_cost) if buy_cost > 0 else 0,
+                            'commission': float(stock_position * actual_sell_price * commission_rate),
+                            'slippage': float(stock_position * current_price * slippage_pct),
+                            'stock_code': code,
+                        })
+                        stock_position = 0
                 
                 # 记录权益
                 total_value = stock_capital + stock_position * current_price

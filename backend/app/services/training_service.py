@@ -26,6 +26,7 @@ from app.models.user_model import UserModel
 from app.services.feature_service import FeatureService
 from app.services.data_service import DataService
 from app.core.config import settings
+from app.core.database import SessionLocal
 
 
 training_progress = {}
@@ -93,26 +94,28 @@ class ModelCheckpoint:
     """模型检查点管理"""
     
     @staticmethod
-    def update_checkpoint_metadata(task_id: int, feature_cols: list = None, feature_importance: dict = None):
-        """向已有检查点文件追加元数据（feature_cols / feature_importance），不触碰模型权重
-        
-        训练完成后调用，将特征列名和特征重要性写入检查点，
+    def update_checkpoint_metadata(task_id: int, feature_cols: list = None, feature_importance: dict = None, scaler_params: dict = None):
+        """向已有检查点文件追加元数据（feature_cols / feature_importance / scaler_params），不触碰模型权重
+
+        训练完成后调用，将特征列名、特征重要性和标准化参数写入检查点，
         以便预测和解释性 API 读取，无需重新保存模型对象。
         """
         checkpoint_path = os.path.join(settings.MODEL_DIR, f'task_{task_id}_checkpoint.pt')
         if not os.path.exists(checkpoint_path):
             return
-        
+
         with open(checkpoint_path, 'rb') as f:
             magic = f.read(4)
         is_pytorch = magic[:2] == b'PK'
-        
+
         if is_pytorch:
             checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
             if feature_cols is not None:
                 checkpoint['feature_cols'] = feature_cols
             if feature_importance is not None:
                 checkpoint['feature_importance'] = feature_importance
+            if scaler_params is not None:
+                checkpoint['scaler_params'] = scaler_params
             torch.save(checkpoint, checkpoint_path)
         else:
             with open(checkpoint_path, 'rb') as f:
@@ -121,6 +124,8 @@ class ModelCheckpoint:
                 checkpoint['feature_cols'] = feature_cols
             if feature_importance is not None:
                 checkpoint['feature_importance'] = feature_importance
+            if scaler_params is not None:
+                checkpoint['scaler_params'] = scaler_params
             with open(checkpoint_path, 'wb') as f:
                 pickle.dump(checkpoint, f)
     
@@ -152,6 +157,7 @@ class ModelCheckpoint:
             'feature_window': checkpoint.get('feature_window', 1),
             'input_size': checkpoint.get('input_size', 0),
             'metrics': checkpoint.get('metrics', {}),
+            'scaler_params': checkpoint.get('scaler_params', None),
         }
     
     @staticmethod
@@ -369,10 +375,27 @@ class TrainingService:
         return []
     
     def get_training_progress(self, task_id: int) -> Dict[str, Any]:
-        """获取训练进度"""
+        """获取训练进度
+
+        优先从全局缓存读取（实时性好），缓存无数据时从数据库读取（支持进程重启后恢复）。
+        """
         global training_progress
-        return training_progress.get(task_id, {})
-    
+        cached = training_progress.get(task_id)
+        if cached:
+            return cached
+        # 全局缓存无数据，尝试从数据库恢复
+        try:
+            db = SessionLocal()
+            try:
+                task = db.query(TrainingTask).filter(TrainingTask.id == task_id).first()
+                if task and task.progress:
+                    return task.progress
+            finally:
+                db.close()
+        except Exception:
+            pass
+        return {}
+
     def _log(self, task_id: int, message: str):
         """写入训练日志"""
         log_path = os.path.join(settings.MODEL_DIR, f'task_{task_id}_log.txt')
@@ -380,6 +403,28 @@ class TrainingService:
         timestamp = datetime.now().strftime('%H:%M:%S')
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(f"[{timestamp}] {message}\n")
+
+    def _update_progress(self, task_id: int, progress_data: dict):
+        """统一更新训练进度：同步写入全局缓存和数据库
+
+        训练在后台线程执行，self.db 可能存在线程安全问题，
+        因此使用独立的 Session（SessionLocal）来更新数据库。
+        全局字典 training_progress 仍作为 SSE 轮询的实时缓存。
+        """
+        global training_progress
+        training_progress[task_id] = progress_data
+        try:
+            db = SessionLocal()
+            try:
+                task = db.query(TrainingTask).filter(TrainingTask.id == task_id).first()
+                if task:
+                    task.progress = progress_data
+                    db.commit()
+            finally:
+                db.close()
+        except Exception:
+            # 数据库写入失败不应中断训练流程，仅影响进度恢复能力
+            pass
 
     def run_training(self, task_id: int):
         """执行训练"""
@@ -419,14 +464,14 @@ class TrainingService:
             if user_model.target == 'multi_feature_next_day':
                 self._log(task_id, "多维预测模式：训练主目标为收益率，波动率与量变率在预测阶段基于特征推导")
             
-            training_progress[task_id] = {
+            self._update_progress(task_id, {
                 'stage': 'data_preparation',
                 'progress': 0,
                 'start_time': training_start_time,
                 'data_preparation_progress': 0,
                 'elapsed_seconds': 0,
                 'estimated_remaining_seconds': None,
-            }
+            })
             self._log(task_id, "阶段1: 数据准备中...")
             
             X_train, X_val, y_train, y_val = self._prepare_data(user_model, task_id)
@@ -436,13 +481,13 @@ class TrainingService:
             else:
                 self._log(task_id, f"数据准备完成 | 训练集: {X_train.shape[0]}条, 验证集: {X_val.shape[0]}条, 特征维度: {X_train.shape[1]}")
             
-            training_progress[task_id] = {
+            self._update_progress(task_id, {
                 'stage': 'training',
                 'progress': 0,
                 'start_time': training_start_time,
                 'elapsed_seconds': time.time() - training_start_time,
                 'estimated_remaining_seconds': None,
-            }
+            })
             self._log(task_id, "阶段2: 模型训练中...")
             
             if model_type in ['lstm', 'gru', 'mlp']:
@@ -470,7 +515,7 @@ class TrainingService:
             user_model.status = 'trained'
             self.db.commit()
             
-            # 训练完成后计算特征重要性并写入检查点
+            # 训练完成后计算特征重要性并写入检查点，同时保存标准化参数
             try:
                 trained_model, _, _, _ = ModelCheckpoint.load_checkpoint(task_id)
                 feature_importance = self._compute_feature_importance(
@@ -482,18 +527,26 @@ class TrainingService:
                         task_id,
                         feature_cols=self._feature_cols,
                         feature_importance=feature_importance,
+                        scaler_params=self._scaler_params,
                     )
                     self._log(task_id, f"特征重要性已计算，共 {len(feature_importance)} 个特征")
+                else:
+                    # 即使无特征重要性，也需保存标准化参数
+                    ModelCheckpoint.update_checkpoint_metadata(
+                        task_id,
+                        feature_cols=self._feature_cols,
+                        scaler_params=self._scaler_params,
+                    )
             except Exception as e:
                 self._log(task_id, f"特征重要性计算跳过: {str(e)}")
             
-            training_progress[task_id] = {
+            self._update_progress(task_id, {
                 'stage': 'completed',
                 'progress': 100,
                 'start_time': training_start_time,
                 'elapsed_seconds': time.time() - training_start_time,
                 'estimated_remaining_seconds': 0,
-            }
+            })
             self._log(task_id, f"训练完成! 指标: {', '.join(f'{k}={v:.6f}' for k, v in metrics.items() if isinstance(v, (int, float)))}")
             
         except Exception as e:
@@ -501,35 +554,37 @@ class TrainingService:
             task.end_time = datetime.now()
             task.error_message = str(e)
             self.db.commit()
-            training_progress[task_id] = {'stage': 'failed', 'error': str(e)}
+            self._update_progress(task_id, {'stage': 'failed', 'error': str(e)})
             self._log(task_id, f"训练失败: {str(e)}")
     
     def _prepare_data(self, user_model: UserModel, task_id: int):
         """准备训练数据
-        
-        对每只股票：获取价格 → 计算特征 → 生成标签 → 标准化 → 构建窗口特征
+
+        对每只股票：获取价格 → 计算特征 → 生成标签 → 构建窗口/序列特征
         合并所有股票数据后按时间序列 80/20 划分训练集和验证集
-        
+        仅用训练集计算 Z-score 标准化参数，避免数据泄露
+
         特征窗口机制：
         - LSTM/GRU: 在每只股票内独立构建序列（修复跨股票序列bug）
         - sklearn/MLP + feature_window>1: 将近N日特征展平为单一向量
         - sklearn/MLP + feature_window=1: 单日截面模式（向后兼容）
         """
         self._feature_cols = []
-        
+        self._scaler_params = None  # 保存标准化参数，供检查点持久化
+
         model_type = user_model.model_type
         feature_window = getattr(user_model, 'feature_window', None) or 1
-        
+
         if model_type in ['lstm', 'gru']:
             seq_len = user_model.model_config.get('sequence_length', 20)
-        
+
         all_features = []
         all_labels = []
         skip_reasons = []
-        
+
         total_stocks = len(user_model.stock_codes)
         processed_stocks = 0
-        
+
         for code in user_model.stock_codes:
             try:
                 existing_prices = self.data_service.get_stock_prices(code=code, limit=1)
@@ -548,17 +603,17 @@ class TrainingService:
                     end_date=user_model.train_date_range.get('end') if user_model.train_date_range else None,
                     limit=5000
                 )
-                
+
                 min_data = 30
                 if model_type in ['lstm', 'gru']:
                     min_data = max(30, seq_len + 10)
                 elif feature_window > 1:
                     min_data = max(30, feature_window + 10)
-                
+
                 if len(prices) < min_data:
                     skip_reasons.append(f"{code}: 价格数据不足{len(prices)}条（需≥{min_data}）")
                     continue
-                
+
                 df = self.feature_service.calculate_features(
                     stock_code=code,
                     indicators=user_model.features,
@@ -567,22 +622,22 @@ class TrainingService:
                     end_date=user_model.train_date_range.get('end') if user_model.train_date_range else None,
                     limit=5000
                 )
-                
+
                 if df is None or df.empty:
                     skip_reasons.append(f"{code}: 特征计算结果为空")
                     continue
-                
+
                 exclude_cols = {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
                                 'change_pct', 'change_amount', 'adj_close'}
                 feature_cols = [col for col in df.columns if col not in exclude_cols]
-                
+
                 if not self._feature_cols and feature_cols:
                     self._feature_cols = feature_cols
-                
+
                 if not feature_cols:
                     skip_reasons.append(f"{code}: 无可用特征列")
                     continue
-                
+
                 target = user_model.target
                 if target == 'next_day_return':
                     df['target'] = df['close'].shift(-1) / df['close'] - 1
@@ -610,26 +665,24 @@ class TrainingService:
                     df['target'] = days_to_target / 5
                 else:
                     df['target'] = df['close'].shift(-1) / df['close'] - 1
-                
+
                 relevant_cols = feature_cols + ['target']
                 df_clean = df[relevant_cols].dropna()
-                
+
                 min_clean = 20
                 if model_type in ['lstm', 'gru']:
                     min_clean = max(20, seq_len + 5)
                 elif feature_window > 1:
                     min_clean = max(20, feature_window + 5)
-                
+
                 if len(df_clean) < min_clean:
                     skip_reasons.append(f"{code}: 清洗后数据不足{len(df_clean)}条（需≥{min_clean}）")
                     continue
-                
-                df_features = df_clean[feature_cols].copy()
-                df_features = (df_features - df_features.mean()) / df_features.std()
-                
-                X_stock = df_features.values
+
+                # 不在此处标准化，保留原始特征值，合并后再统一标准化
+                X_stock = df_clean[feature_cols].values
                 y_stock = df_clean['target'].values
-                
+
                 if model_type in ['lstm', 'gru']:
                     if len(X_stock) > seq_len:
                         for i in range(len(X_stock) - seq_len):
@@ -656,7 +709,7 @@ class TrainingService:
                 processed_stocks += 1
                 data_preparation_progress = int(processed_stocks / total_stocks * 100)
                 elapsed = time.time() - training_progress[task_id].get('start_time', time.time())
-                training_progress[task_id] = {
+                self._update_progress(task_id, {
                     'stage': 'data_preparation',
                     'progress': data_preparation_progress,
                     'start_time': training_progress[task_id].get('start_time'),
@@ -665,23 +718,47 @@ class TrainingService:
                     'total_stocks': total_stocks,
                     'elapsed_seconds': elapsed,
                     'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, data_preparation_progress),
-                }
-        
+                })
+
         if not all_features:
             detail = '；'.join(skip_reasons) if skip_reasons else '未选择任何股票'
             raise ValueError(f"没有足够的数据进行训练。原因：{detail}")
-        
+
         if model_type in ['lstm', 'gru']:
             X = np.array(all_features)
             y = np.array(all_labels)
         else:
             X = np.vstack(all_features)
             y = np.concatenate(all_labels)
-        
+
+        # 先划分训练集和验证集，再仅用训练集计算标准化参数，避免数据泄露
         split_idx = int(len(X) * 0.8)
         X_train, X_val = X[:split_idx], X[split_idx:]
         y_train, y_val = y[:split_idx], y[split_idx:]
-        
+
+        # 仅用训练集计算 Z-score 的均值和标准差
+        if model_type in ['lstm', 'gru']:
+            # 3D数据: (samples, seq_len, features)，沿样本轴计算每个特征的统计量
+            train_2d = X_train.reshape(-1, X_train.shape[-1])
+            feature_mean = np.mean(train_2d, axis=0)
+            feature_std = np.std(train_2d, axis=0)
+            feature_std[feature_std < 1e-8] = 1.0  # 防止除零
+            X_train = (X_train - feature_mean) / feature_std
+            X_val = (X_val - feature_mean) / feature_std
+        else:
+            # 2D数据: (samples, features)
+            feature_mean = np.mean(X_train, axis=0)
+            feature_std = np.std(X_train, axis=0)
+            feature_std[feature_std < 1e-8] = 1.0  # 防止除零
+            X_train = (X_train - feature_mean) / feature_std
+            X_val = (X_val - feature_mean) / feature_std
+
+        # 保存标准化参数到实例，供检查点持久化
+        self._scaler_params = {
+            'mean': feature_mean.tolist(),
+            'std': feature_std.tolist(),
+        }
+
         return X_train, X_val, y_train, y_val
     
     def _construct_window_features(self, X: np.ndarray, window_size: int) -> np.ndarray:
@@ -831,12 +908,21 @@ class TrainingService:
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=config['learning_rate'])
         
+        # 学习率调度器：验证损失停滞时自动降低学习率
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6
+        )
+        
         epochs = config['epochs']
         batch_size = config['batch_size']
         
         best_val_loss = float('inf')
         train_losses = []
         val_losses = []
+        
+        # Early Stopping 参数
+        patience_counter = 0
+        early_stop_patience = 15
         
         training_start_time = training_progress.get(task_id, {}).get('start_time', time.time())
         
@@ -864,9 +950,12 @@ class TrainingService:
             train_losses.append(epoch_loss / (len(X_train_t) // batch_size + 1))
             val_losses.append(val_loss)
             
+            # 学习率调度：根据验证损失调整学习率
+            scheduler.step(val_loss)
+            
             progress = int((epoch + 1) / epochs * 100)
             elapsed = time.time() - training_start_time
-            training_progress[task_id] = {
+            self._update_progress(task_id, {
                 'stage': 'training',
                 'progress': progress,
                 'epoch': epoch + 1,
@@ -876,19 +965,26 @@ class TrainingService:
                 'start_time': training_start_time,
                 'elapsed_seconds': elapsed,
                 'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, progress),
-            }
+            })
             
             if (epoch + 1) % 10 == 0 or epoch == epochs - 1:
-                self._log(task_id, f"Epoch {epoch+1}/{epochs} | 训练损失: {train_losses[-1]:.6f} | 验证损失: {val_loss:.6f}")
+                current_lr = optimizer.param_groups[0]['lr']
+                self._log(task_id, f"Epoch {epoch+1}/{epochs} | 训练损失: {train_losses[-1]:.6f} | 验证损失: {val_loss:.6f} | 学习率: {current_lr:.2e}")
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+                patience_counter = 0
                 ModelCheckpoint.save_checkpoint(
                     model, task_id, 
                     {'best_val_loss': float(best_val_loss)},
                     config, model_type, input_size=input_size,
                     feature_window=feature_window
                 )
+            else:
+                patience_counter += 1
+                if patience_counter >= early_stop_patience:
+                    self._log(task_id, f"Early Stopping: 验证损失连续{early_stop_patience}轮未改善，提前停止于第{epoch+1}轮")
+                    break
         
         model.eval()
         with torch.no_grad():
@@ -944,34 +1040,34 @@ class TrainingService:
         training_start_time = training_progress.get(task_id, {}).get('start_time', time.time())
         
         elapsed = time.time() - training_start_time
-        training_progress[task_id] = {
+        self._update_progress(task_id, {
             'stage': 'training',
             'progress': 10,
             'start_time': training_start_time,
             'elapsed_seconds': elapsed,
             'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, 10),
-        }
+        })
         self._log(task_id, f"开始训练 {model_type} 模型，参数: {config}")
 
         elapsed = time.time() - training_start_time
-        training_progress[task_id] = {
+        self._update_progress(task_id, {
             'stage': 'training',
             'progress': 30,
             'start_time': training_start_time,
             'elapsed_seconds': elapsed,
             'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, 30),
-        }
+        })
         self._log(task_id, "数据准备完成，开始拟合模型...")
         model.fit(X_train, y_train)
 
         elapsed = time.time() - training_start_time
-        training_progress[task_id] = {
+        self._update_progress(task_id, {
             'stage': 'validating',
             'progress': 80,
             'start_time': training_start_time,
             'elapsed_seconds': elapsed,
             'estimated_remaining_seconds': estimate_remaining_seconds(elapsed, 80),
-        }
+        })
         self._log(task_id, "模型拟合完成，正在验证...")
         
         predictions = model.predict(X_val)

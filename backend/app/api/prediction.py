@@ -7,6 +7,9 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta
 import time
+import math
+import logging
+import numpy as np
 
 from app.core.database import get_db
 from app.services.training_service import ModelCheckpoint, TORCH_AVAILABLE
@@ -18,7 +21,98 @@ from app.auth import get_current_active_user
 from app.models.user import User as UserModel
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
+
+# ============================================================
+# 公共预测逻辑
+# ============================================================
+
+# 训练时排除的基础列，用于兼容旧模型（未保存 feature_cols 时自动选择特征列）
+_EXCLUDE_COLS = frozenset({
+    'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
+    'change_pct', 'change_amount', 'adj_close',
+})
+
+
+def _prepare_features(
+    df, saved_feature_cols, user_model, data_service, feature_service, stock_code
+) -> tuple:
+    """准备特征数据，返回 (df, feature_cols, missing_warning)
+
+    优先使用训练时保存的特征列名（saved_feature_cols），确保预测特征与训练一致；
+    若存在缺失列，尝试同步最新价格后重新计算；
+    缺失超过20%时拒绝预测，少量缺失用前向填充保证维度一致。
+    若 saved_feature_cols 为空（旧模型），则自动排除基础列后选择剩余列作为特征。
+    """
+    missing_warning = None
+
+    if saved_feature_cols:
+        available_cols = set(df.columns)
+        feature_cols = [col for col in saved_feature_cols if col in available_cols]
+        missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+
+        if missing_cols:
+            # 数据可能不够计算某些技术指标，尝试获取更多数据后重新计算
+            try:
+                data_service.sync_stock_prices(stock_code)
+                time.sleep(1)
+                df = feature_service.calculate_features(
+                    stock_code=stock_code,
+                    indicators=user_model.features,
+                    indicator_params=user_model.feature_config or {},
+                    limit=10000,
+                )
+                if df is not None and not df.empty:
+                    available_cols = set(df.columns)
+                    feature_cols = [col for col in saved_feature_cols if col in available_cols]
+                    missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+            except Exception as e:
+                logger.warning(f"同步股票价格失败 {stock_code}: {e}")
+
+        if missing_cols:
+            missing_ratio = len(missing_cols) / len(saved_feature_cols)
+            # 缺失超过20%则拒绝预测
+            if missing_ratio > 0.2:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"股票 {stock_code} 数据不足：{len(missing_cols)}/{len(saved_feature_cols)}个特征缺失({missing_ratio:.0%})，请先同步该股票数据后再预测。缺失特征: {', '.join(missing_cols[:5])}{'...' if len(missing_cols) > 5 else ''}"
+                )
+            # 少量缺失：前向填充，仍有NaN用0填充
+            for col in missing_cols:
+                df[col] = 0.0
+            feature_cols = saved_feature_cols
+            missing_warning = f"{len(missing_cols)}个特征缺失已用默认值填充: {', '.join(missing_cols[:3])}{'...' if len(missing_cols) > 3 else ''}"
+    else:
+        # 兼容旧模型（未保存 feature_cols）：自动选择特征列
+        feature_cols = [col for col in df.columns if col not in _EXCLUDE_COLS]
+
+    return df, feature_cols, missing_warning
+
+
+def _validate_feature_dims(feature_cols, input_size, feature_window, model_type, stock_codes):
+    """校验特征维度，不匹配时抛出 HTTPException
+
+    LSTM/GRU 模型维度校验由模型内部处理，此处仅校验非序列模型。
+    feature_window > 1 时，总维度 = 特征列数 × 窗口天数。
+    """
+    if feature_window <= 1 and model_type not in ['lstm', 'gru']:
+        if len(feature_cols) != input_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"特征维度不匹配：当前{len(feature_cols)}个特征，模型需要{input_size}个。训练股票: {', '.join(stock_codes or [])}"
+            )
+    elif feature_window > 1:
+        if len(feature_cols) * feature_window != input_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"特征维度不匹配：{len(feature_cols)}列×{feature_window}窗口={len(feature_cols)*feature_window}，模型需要{input_size}。训练股票: {', '.join(stock_codes or [])}"
+            )
+
+
+# ============================================================
+# 数据获取辅助
+# ============================================================
 
 def _ensure_stock_data(
     data_service: DataService,
@@ -72,8 +166,8 @@ def _ensure_stock_data(
     try:
         data_service.sync_stock_prices(stock_code)
         time.sleep(2)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"同步股票价格失败 {stock_code}: {e}")
 
     df = feature_service.calculate_features(
         stock_code=stock_code,
@@ -87,8 +181,8 @@ def _ensure_stock_data(
     # 阶段4：仍为空，全量重新获取
     try:
         data_service.fetch_stock_data(stock_code)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"全量获取股票数据失败 {stock_code}: {e}")
 
     df = feature_service.calculate_features(
         stock_code=stock_code,
@@ -112,6 +206,10 @@ def _verify_task_ownership(task: TrainingTask, current_user: UserModel):
     if task.user_model is None or task.user_model.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问该训练任务")
 
+
+# ============================================================
+# 请求/响应模型
+# ============================================================
 
 class PredictRequest(BaseModel):
     """预测请求"""
@@ -148,6 +246,7 @@ class PredictResponse(BaseModel):
     predicted_open: Optional[float] = None
     predicted_high: Optional[float] = None
     predicted_low: Optional[float] = None
+    missing_features_warning: Optional[str] = None
 
 
 class BatchPredictRequest(BaseModel):
@@ -156,6 +255,10 @@ class BatchPredictRequest(BaseModel):
     stock_codes: List[str] = Field(..., description="预测股票代码列表")
 
 
+# ============================================================
+# 预测接口
+# ============================================================
+
 @router.post("/predict", response_model=PredictResponse)
 async def predict(
     request: PredictRequest,
@@ -163,7 +266,7 @@ async def predict(
     db: Session = Depends(get_db)
 ):
     """使用已训练模型进行单只股票预测，需验证任务所有权
-    
+
     流程：验证权限 → 加载模型 → 获取最新数据 → 计算特征 → 模型推理 → 返回预测结果
     """
     task = db.query(TrainingTask).filter(TrainingTask.id == request.task_id).first()
@@ -190,7 +293,8 @@ async def predict(
     try:
         checkpoint_meta = ModelCheckpoint.load_checkpoint_metadata(task.id)
         saved_feature_cols = checkpoint_meta.get('feature_cols', []) or []
-    except (FileNotFoundError, Exception):
+    except (FileNotFoundError, Exception) as e:
+        logger.warning(f"加载检查点元数据失败 task_id={task.id}: {e}")
         saved_feature_cols = []
 
     # 确保股票有足够数据（自动获取和补充），并计算特征
@@ -199,74 +303,40 @@ async def predict(
         user_model.features, user_model.feature_config or {},
     )
 
-    if saved_feature_cols:
-        available_cols = set(df.columns)
-        feature_cols = [col for col in saved_feature_cols if col in available_cols]
-        missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+    # 准备特征列（使用提取的公共逻辑）
+    df, feature_cols, missing_warning = _prepare_features(
+        df, saved_feature_cols, user_model, data_service, feature_service, request.stock_code
+    )
 
-        if missing_cols:
-            # 数据可能不够计算某些技术指标，尝试获取更多数据后重新计算
-            try:
-                data_service.sync_stock_prices(stock_code)
-                import time; time.sleep(1)
-                df = feature_service.calculate_features(
-                    stock_code=stock_code,
-                    indicators=user_model.features,
-                    indicator_params=user_model.feature_config or {},
-                    limit=10000,
-                )
-                if df is not None and not df.empty:
-                    available_cols = set(df.columns)
-                    feature_cols = [col for col in saved_feature_cols if col in available_cols]
-                    missing_cols = [col for col in saved_feature_cols if col not in available_cols]
-            except Exception:
-                pass
+    if not feature_cols:
+        raise HTTPException(status_code=400, detail="无可用特征列")
 
-        if missing_cols:
-            # 仍有缺失列，用前向填充+0兜底确保维度一致
-            for col in missing_cols:
-                df[col] = 0.0
-            feature_cols = saved_feature_cols
-        if len(feature_cols) != len(saved_feature_cols):
-            trained_stocks = user_model.stock_codes or []
-            raise HTTPException(
-                status_code=400,
-                detail=f"模型需要{len(saved_feature_cols)}个特征，当前数据只有{len(feature_cols)}个可用。该模型训练时使用的股票为 {', '.join(trained_stocks)}，请使用这些股票进行预测"
-            )
-    else:
-        # 兼容旧模型（未保存 feature_cols）：自动选择特征列
-        feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
-                                'change_pct', 'change_amount', 'adj_close'}]
-        if not feature_cols:
-            raise HTTPException(status_code=400, detail="无可用特征列")
+    # 校验特征列数与保存的列数一致
+    if saved_feature_cols and len(feature_cols) != len(saved_feature_cols):
+        trained_stocks = user_model.stock_codes or []
+        raise HTTPException(
+            status_code=400,
+            detail=f"模型需要{len(saved_feature_cols)}个特征，当前数据只有{len(feature_cols)}个可用。该模型训练时使用的股票为 {', '.join(trained_stocks)}，请使用这些股票进行预测"
+        )
+
+    # 校验特征维度
+    _validate_feature_dims(feature_cols, input_size, feature_window, user_model.model_type, user_model.stock_codes)
 
     df_features = df[feature_cols].copy()
-    df_features = (df_features - df_features.mean()) / df_features.std()
+    # 标准化：优先使用训练集保存的统计量，回退到当前数据的统计量（兼容旧模型）
+    scaler_params = checkpoint_meta.get('scaler_params', None) if checkpoint_meta else None
+    if scaler_params and scaler_params.get('mean') is not None and scaler_params.get('std') is not None:
+        feature_mean = np.array(scaler_params['mean'])
+        feature_std = np.array(scaler_params['std'])
+        # 避免除以0
+        feature_std = np.where(feature_std < 1e-8, 1.0, feature_std)
+        df_features = (df_features - feature_mean) / feature_std
+    else:
+        df_features = (df_features - df_features.mean()) / df_features.std()
 
     model_type = user_model.model_type
     model_config = user_model.model_config or {}
     target = user_model.target
-
-    if model_type in ['lstm', 'gru']:
-        expected_feat_dim = input_size
-    elif feature_window > 1:
-        expected_feat_dim = input_size // feature_window
-    else:
-        expected_feat_dim = input_size
-
-    trained_stocks = user_model.stock_codes or []
-    if feature_window <= 1 and model_type not in ['lstm', 'gru']:
-        if len(feature_cols) != input_size:
-            raise HTTPException(
-                status_code=400,
-                detail=f"特征维度不匹配：当前{len(feature_cols)}个特征，模型需要{input_size}个。该模型训练时使用的股票为 {', '.join(trained_stocks)}，请使用这些股票进行预测"
-            )
-    elif feature_window > 1:
-        if len(feature_cols) * feature_window != input_size:
-            raise HTTPException(
-                status_code=400,
-                detail=f"特征维度不匹配：{len(feature_cols)}列×{feature_window}窗口={len(feature_cols)*feature_window}，模型需要{input_size}。该模型训练时使用的股票为 {', '.join(trained_stocks)}，请使用这些股票进行预测"
-            )
 
     try:
         prediction = _do_predict(model, model_type, model_config, df_features, input_size, feature_window)
@@ -285,8 +355,9 @@ async def predict(
         'volume': int(latest_row['volume']) if latest_row['volume'] is not None else None,
     }
 
-    # 计算置信度：分类模型用预测概率，回归模型用 |prediction| 映射
-    confidence = _compute_confidence(prediction, target)
+    # 计算置信度：分类模型用预测概率，回归模型用 |prediction| 映射；再用历史准确率校准
+    raw_confidence = _compute_confidence(prediction, target)
+    confidence = _compute_calibrated_confidence(raw_confidence, db, user_model.id)
 
     # 根据 target 类型推导预测涨跌幅
     predicted_change_pct = _compute_predicted_change_pct(prediction, target)
@@ -351,6 +422,7 @@ async def predict(
         db.commit()
     except Exception as e:
         db.rollback()
+        logger.warning(f"保存预测结果失败 stock_code={request.stock_code}: {e}")
 
     direction_label = _direction_to_chinese(prediction_label)
 
@@ -381,6 +453,7 @@ async def predict(
         predicted_open=multi_features.get('predicted_open'),
         predicted_high=multi_features.get('predicted_high'),
         predicted_low=multi_features.get('predicted_low'),
+        missing_features_warning=missing_warning,
     )
 
 
@@ -414,7 +487,8 @@ async def batch_predict(
     try:
         checkpoint_meta = ModelCheckpoint.load_checkpoint_metadata(task.id)
         saved_feature_cols = checkpoint_meta.get('feature_cols', []) or []
-    except (FileNotFoundError, Exception):
+    except (FileNotFoundError, Exception) as e:
+        logger.warning(f"加载检查点元数据失败 task_id={task.id}: {e}")
         saved_feature_cols = []
 
     model_type = user_model.model_type
@@ -429,40 +503,18 @@ async def batch_predict(
                 user_model.features, user_model.feature_config or {},
             )
 
-            if saved_feature_cols:
-                available_cols = set(df.columns)
-                feature_cols = [col for col in saved_feature_cols if col in available_cols]
-                missing_cols = [col for col in saved_feature_cols if col not in available_cols]
+            # 准备特征列（使用提取的公共逻辑）
+            df, feature_cols, missing_warning = _prepare_features(
+                df, saved_feature_cols, user_model, data_service, feature_service, code
+            )
 
-                if missing_cols:
-                    try:
-                        data_service.sync_stock_prices(code)
-                        import time as _time; _time.sleep(1)
-                        df = feature_service.calculate_features(
-                            stock_code=code,
-                            indicators=user_model.features,
-                            indicator_params=user_model.feature_config or {},
-                            limit=10000,
-                        )
-                        if df is not None and not df.empty:
-                            available_cols = set(df.columns)
-                            feature_cols = [col for col in saved_feature_cols if col in available_cols]
-                            missing_cols = [col for col in saved_feature_cols if col not in available_cols]
-                    except Exception:
-                        pass
+            # 校验特征列数与保存的列数一致
+            if saved_feature_cols and len(feature_cols) != len(saved_feature_cols):
+                trained_stocks = user_model.stock_codes or []
+                results.append({'stock_code': code, 'error': f'特征不足：模型需要{len(saved_feature_cols)}个，当前{len(feature_cols)}个可用。训练股票: {", ".join(trained_stocks)}'})
+                continue
 
-                if missing_cols:
-                    for col in missing_cols:
-                        df[col] = 0.0
-                    feature_cols = saved_feature_cols
-                if len(feature_cols) != len(saved_feature_cols):
-                    trained_stocks = user_model.stock_codes or []
-                    results.append({'stock_code': code, 'error': f'特征不足：模型需要{len(saved_feature_cols)}个，当前{len(feature_cols)}个可用。训练股票: {", ".join(trained_stocks)}'})
-                    continue
-            else:
-                feature_cols = [col for col in df.columns if col not in {'id', 'stock_code', 'open', 'high', 'low', 'close', 'volume', 'amount',
-                                'change_pct', 'change_amount', 'adj_close'}]
-            
+            # 校验特征维度（批量预测中不抛异常，而是记录错误跳过）
             dim_ok = True
             if feature_window <= 1 and model_type not in ['lstm', 'gru']:
                 dim_ok = len(feature_cols) == input_size
@@ -470,14 +522,22 @@ async def batch_predict(
                 dim_ok = len(feature_cols) * feature_window == input_size
             else:
                 dim_ok = len(feature_cols) == input_size
-            
+
             if not feature_cols or not dim_ok:
                 trained_stocks = user_model.stock_codes or []
                 results.append({'stock_code': code, 'error': f'特征维度不匹配({len(feature_cols)} vs {input_size}, window={feature_window})。训练股票: {", ".join(trained_stocks)}'})
                 continue
 
             df_features = df[feature_cols].copy()
-            df_features = (df_features - df_features.mean()) / df_features.std()
+            # 标准化：优先使用训练集保存的统计量，回退到当前数据的统计量（兼容旧模型）
+            scaler_params = checkpoint_meta.get('scaler_params', None) if checkpoint_meta else None
+            if scaler_params and scaler_params.get('mean') is not None and scaler_params.get('std') is not None:
+                feature_mean = np.array(scaler_params['mean'])
+                feature_std = np.array(scaler_params['std'])
+                feature_std = np.where(feature_std < 1e-8, 1.0, feature_std)
+                df_features = (df_features - feature_mean) / feature_std
+            else:
+                df_features = (df_features - df_features.mean()) / df_features.std()
 
             prediction = _do_predict(model, model_type, model_config, df_features, input_size, feature_window)
             prediction_label = _prediction_to_label(prediction, target)
@@ -485,7 +545,8 @@ async def batch_predict(
             latest_row = df.iloc[-1]
             latest_close = float(latest_row['close']) if latest_row['close'] is not None else None
 
-            confidence = _compute_confidence(prediction, target)
+            raw_confidence = _compute_confidence(prediction, target)
+            confidence = _compute_calibrated_confidence(raw_confidence, db, user_model.id)
             predicted_change_pct = _compute_predicted_change_pct(prediction, target)
             predicted_price = None
             if latest_close and predicted_change_pct is not None:
@@ -517,12 +578,14 @@ async def batch_predict(
                 db.commit()
             except Exception as e:
                 db.rollback()
+                logger.warning(f"批量预测保存结果失败 stock_code={code}: {e}")
 
             results.append({
                 'stock_code': code,
                 'prediction': round(float(prediction), 6),
                 'prediction_label': prediction_label,
                 'latest_close': latest_close,
+                'missing_features_warning': missing_warning,
             })
         except Exception as e:
             results.append({'stock_code': code, 'error': str(e)})
@@ -556,9 +619,13 @@ async def get_predictable_stocks(
     return {'stocks': stocks_info}
 
 
+# ============================================================
+# 模型推理与标签转换
+# ============================================================
+
 def _do_predict(model, model_type: str, model_config: dict, df_features, input_size: int, feature_window: int = 1) -> float:
     """执行模型预测，返回原始预测值
-    
+
     Args:
         feature_window: 特征窗口天数，>1时构建窗口展平特征
     """
@@ -647,6 +714,42 @@ def _compute_confidence(prediction: float, target: str) -> float:
     else:
         abs_val = abs(prediction)
         return min(abs_val / 0.05, 1.0)
+
+
+def _compute_calibrated_confidence(
+    raw_confidence: float,
+    db: Session,
+    model_id: int,
+) -> float:
+    """基于历史预测准确率校准置信度
+
+    查询该模型的历史预测记录，计算方向预测准确率，
+    用准确率的平方根作为校准因子，避免过度惩罚。
+    新模型无历史记录时返回原始置信度。
+    """
+    try:
+        shares = db.query(PredictionShare).filter(
+            PredictionShare.model_id == model_id,
+            PredictionShare.is_published == True,
+        ).limit(50).all()
+
+        if len(shares) < 5:
+            # 历史记录不足5条，不校准
+            return raw_confidence
+
+        # 统计方向预测正确率（通过 prediction_data 中的 verified 字段）
+        verified = [s for s in shares if s.prediction_data and s.prediction_data.get('verified')]
+        if len(verified) < 5:
+            return raw_confidence
+
+        correct = sum(1 for s in verified if s.prediction_data.get('correct'))
+        accuracy = correct / len(verified) if verified else 0.5
+
+        # 用准确率的平方根校准，避免过度惩罚
+        calibration_factor = math.sqrt(max(accuracy, 0.1))  # 最低0.1防止归零
+        return min(raw_confidence * calibration_factor, 1.0)
+    except Exception:
+        return raw_confidence
 
 
 def _compute_predicted_change_pct(prediction: float, target: str) -> Optional[float]:
@@ -987,9 +1090,9 @@ async def strategy_replay(
                     else:
                         actual_direction = 'flat'
                     correct = (s.direction == actual_direction)
-        except Exception:
+        except Exception as e:
             # 数据获取失败时不影响其他记录，但保留 None 标识
-            pass
+            logger.warning(f"策略回放获取价格失败 stock_code={s.stock_code}: {e}")
 
         replay.append({
             **s.to_dict(),
@@ -1010,5 +1113,175 @@ async def strategy_replay(
             'correct': correct_count,
             'accuracy': accuracy,
             'days': days,
+        },
+    }
+
+
+@router.get("/accuracy")
+async def get_prediction_accuracy(
+    days: int = Query(30, ge=7, le=365, description="统计天数"),
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """获取当前用户的预测准确率统计
+
+    统计指定天数内已验证预测的方向准确率，
+    按模型和股票维度分别汇总。
+    """
+    start_date = datetime.now() - timedelta(days=days)
+
+    # 查询用户所有已验证的预测
+    shares = db.query(PredictionShare).filter(
+        PredictionShare.user_id == current_user.id,
+        PredictionShare.created_at >= start_date,
+    ).all()
+
+    verified = [s for s in shares if s.prediction_data and s.prediction_data.get('verified')]
+    if not verified:
+        return {
+            'total': len(shares),
+            'verified': 0,
+            'correct': 0,
+            'accuracy': 0,
+            'by_model': [],
+            'by_stock': [],
+            'daily_stats': [],
+        }
+
+    correct = sum(1 for s in verified if s.prediction_data.get('correct'))
+
+    # 按模型维度统计
+    model_stats: Dict[str, Dict[str, int]] = {}
+    for s in verified:
+        key = s.model_name or '未知模型'
+        if key not in model_stats:
+            model_stats[key] = {'total': 0, 'correct': 0}
+        model_stats[key]['total'] += 1
+        if s.prediction_data.get('correct'):
+            model_stats[key]['correct'] += 1
+
+    # 按股票维度统计
+    stock_stats: Dict[str, Dict[str, int]] = {}
+    for s in verified:
+        key = f"{s.stock_code} {s.stock_name or ''}".strip()
+        if key not in stock_stats:
+            stock_stats[key] = {'total': 0, 'correct': 0}
+        stock_stats[key]['total'] += 1
+        if s.prediction_data.get('correct'):
+            stock_stats[key]['correct'] += 1
+
+    # 按日统计（最近7天）
+    daily_stats = []
+    for i in range(min(7, days)):
+        day = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+        day_verified = [s for s in verified if s.created_at and s.created_at.strftime('%Y-%m-%d') == day]
+        day_correct = sum(1 for s in day_verified if s.prediction_data.get('correct'))
+        daily_stats.append({
+            'date': day,
+            'total': len(day_verified),
+            'correct': day_correct,
+            'accuracy': round(day_correct / len(day_verified), 3) if day_verified else 0,
+        })
+
+    return {
+        'total': len(shares),
+        'verified': len(verified),
+        'correct': correct,
+        'accuracy': round(correct / len(verified), 3) if verified else 0,
+        'by_model': [
+            {'name': k, 'total': v['total'], 'correct': v['correct'],
+             'accuracy': round(v['correct'] / v['total'], 3) if v['total'] else 0}
+            for k, v in model_stats.items()
+        ],
+        'by_stock': [
+            {'name': k, 'total': v['total'], 'correct': v['correct'],
+             'accuracy': round(v['correct'] / v['total'], 3) if v['total'] else 0}
+            for k, v in stock_stats.items()
+        ],
+        'daily_stats': daily_stats,
+    }
+
+
+@router.get("/daily-report")
+async def get_daily_prediction_report(
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """获取今日预测验证日报
+
+    展示用户昨日预测的验证结果和今日待验证的预测，
+    配合牛牛吉祥物的表情变化形成正反馈循环。
+    """
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_start - timedelta(days=1)
+
+    # 昨日预测验证结果
+    yesterday_preds = db.query(PredictionShare).filter(
+        PredictionShare.user_id == current_user.id,
+        PredictionShare.created_at >= yesterday_start,
+        PredictionShare.created_at < today_start,
+    ).all()
+
+    verified = [p for p in yesterday_preds if p.prediction_data and p.prediction_data.get('verified')]
+    correct = [p for p in verified if p.prediction_data.get('correct')]
+
+    # 今日预测
+    today_preds = db.query(PredictionShare).filter(
+        PredictionShare.user_id == current_user.id,
+        PredictionShare.created_at >= today_start,
+    ).all()
+
+    # 按方向统计今日预测
+    up_count = sum(1 for p in today_preds if p.direction == 'up')
+    down_count = sum(1 for p in today_preds if p.direction == 'down')
+    flat_count = sum(1 for p in today_preds if p.direction == 'flat')
+
+    # 牛牛心情：根据昨日准确率决定吉祥物状态和评语
+    accuracy = len(correct) / len(verified) if verified else None
+    if accuracy is not None:
+        if accuracy >= 0.6:
+            bull_mood = 'happy'
+            bull_comment = '牛牛很满意！昨日预测大获全胜！'
+        elif accuracy >= 0.4:
+            bull_mood = 'thinking'
+            bull_comment = '牛牛在思考...昨日表现还行，继续加油！'
+        else:
+            bull_mood = 'sad'
+            bull_comment = '牛牛有点难过...昨日预测不太理想，需要优化策略'
+    else:
+        bull_mood = 'chill'
+        bull_comment = '牛牛在等你做预测呢！'
+
+    # 昨日预测详情（最多5条）
+    yesterday_details = []
+    for p in verified[:5]:
+        detail = {
+            'stock_code': p.stock_code,
+            'stock_name': p.stock_name,
+            'direction': p.direction,
+            'direction_label': _direction_to_chinese(p.direction),
+            'confidence': p.confidence,
+            'correct': p.prediction_data.get('correct'),
+            'actual_change_pct': p.prediction_data.get('actual_change_pct'),
+        }
+        yesterday_details.append(detail)
+
+    return {
+        'yesterday': {
+            'total': len(yesterday_preds),
+            'verified': len(verified),
+            'correct': len(correct),
+            'accuracy': round(accuracy, 3) if accuracy is not None else None,
+            'details': yesterday_details,
+        },
+        'today': {
+            'total': len(today_preds),
+            'up_count': up_count,
+            'down_count': down_count,
+            'flat_count': flat_count,
+        },
+        'bull': {
+            'mood': bull_mood,
+            'comment': bull_comment,
         },
     }
