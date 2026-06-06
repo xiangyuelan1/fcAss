@@ -11,6 +11,8 @@ import {
   SyncOutlined,
   WarningOutlined,
   QuestionCircleOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -50,6 +52,33 @@ const Dashboard: React.FC = () => {
   const [createDrawerVisible, setCreateDrawerVisible] = useState(false)
   const [predictionAccuracy, setPredictionAccuracy] = useState<any>(null)
   const [dailyReport, setDailyReport] = useState<any>(null)
+
+  const onboardingTasks = useMemo(() => {
+    const hasStockData = stats.stockCount > 0
+    const hasModel = stats.modelCount > 0
+    const hasTrainingTask = stats.taskCount > 0
+    const hasCompletedTask = stats.completedTaskCount > 0
+    const hasPrediction = myPredictions.length > 0
+    const hasBacktest = stats.backtestCount > 0 || backtestResults.length > 0
+
+    return [
+      { key: 'data', title: '查看示例股票数据', done: hasStockData, action: '去数据管理', path: '/data' },
+      { key: 'model', title: '创建或打开第一个模型', done: hasModel, action: hasModel ? '查看模型' : '创建模型', path: hasModel ? '/models' : '/models/build' },
+      { key: 'train', title: '完成一次模型训练', done: hasCompletedTask, action: hasTrainingTask ? '查看训练' : '开始训练', path: hasModel ? '/train-predict' : '/models/build' },
+      { key: 'predict', title: '执行一次预测', done: hasPrediction, action: '去预测', path: '/train-predict?tab=predict' },
+      { key: 'backtest', title: '完成一次回测', done: hasBacktest, action: '去回测', path: '/train-predict?tab=backtest' },
+    ]
+  }, [stats, myPredictions.length, backtestResults.length])
+
+  const nextOnboardingTask = useMemo(
+    () => onboardingTasks.find(task => !task.done),
+    [onboardingTasks],
+  )
+
+  const onboardingProgress = useMemo(
+    () => Math.round((onboardingTasks.filter(task => task.done).length / onboardingTasks.length) * 100),
+    [onboardingTasks],
+  )
 
   /* 从运行中的任务 id 列表推导 SSE 连接 */
   const runningTaskIds = useMemo(
@@ -268,6 +297,54 @@ const Dashboard: React.FC = () => {
             </div>
           }
         />
+      )}
+
+      {/* 新手任务清单：把功能导航转成完整体验闭环 */}
+      {onboardingProgress < 100 && (
+        <Card
+          size="small"
+          style={{ marginBottom: 16 }}
+          title={
+            <Space>
+              <MascotBull mood="happy" size="small" />
+              <span>新手上手任务</span>
+              <Tag color="blue">{onboardingProgress}%</Tag>
+            </Space>
+          }
+          extra={nextOnboardingTask && (
+            <Button type="primary" size="small" onClick={() => navigate(nextOnboardingTask.path)}>
+              下一步：{nextOnboardingTask.action}
+            </Button>
+          )}
+        >
+          <Row gutter={[8, 8]}>
+            {onboardingTasks.map(task => (
+              <Col xs={24} sm={12} lg={8} xl={4} key={task.key}>
+                <div
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: task.done ? 'rgba(82, 196, 26, 0.08)' : 'rgba(250, 173, 20, 0.08)',
+                    border: `1px solid ${task.done ? '#b7eb8f' : '#ffe58f'}`,
+                    minHeight: 56,
+                  }}
+                >
+                  <Space size={6} align="start">
+                    {task.done ? <CheckCircleOutlined style={{ color: '#52c41a', marginTop: 3 }} /> : <ClockCircleOutlined style={{ color: '#faad14', marginTop: 3 }} />}
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{task.title}</div>
+                      {!task.done && (
+                        <Button type="link" size="small" style={{ padding: 0, height: 20 }} onClick={() => navigate(task.path)}>
+                          {task.action}
+                        </Button>
+                      )}
+                    </div>
+                  </Space>
+                </div>
+              </Col>
+            ))}
+          </Row>
+        </Card>
       )}
 
       {/* 统计卡片 */}

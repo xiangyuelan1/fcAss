@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
+from datetime import datetime, timedelta
 
 from app.core.config import settings
 from app.core.database import init_db, _migrate_db, SessionLocal, Base
@@ -21,6 +22,7 @@ from app.models.system_config import SystemConfig
 from app.models.watchlist import Watchlist, WatchlistItem
 from app.models.daily_guess import DailyGuessStock, DailyGuessVote
 from app.models.community import CommunityModel, CommunitySignal
+from app.models.prediction_share import PredictionShare
 from app.api import api_router
 from app.auth import get_password_hash
 from app.services.auto_predict_service import auto_predict_community_models
@@ -140,13 +142,8 @@ def _ensure_seed_data():
     """
     db = SessionLocal()
     try:
-        # 已有股票数据则跳过，说明非首次启动
         stock_count = db.query(Stock).count()
-        if stock_count > 0:
-            print("[OK] 种子数据已存在，跳过初始化")
-            return
-
-        print("[启动] 正在初始化种子数据...")
+        print("[启动] 正在检查种子数据...")
         from app.services.data_service import DataService
         service = DataService(db)
 
@@ -156,13 +153,16 @@ def _ensure_seed_data():
             ('000001', '平安银行'),
             ('002594', '比亚迪'),
         ]
-        for code, name in seed_stocks:
-            try:
-                result = service.fetch_stock_data(code)
-                count = result.get('price_count', 0)
-                print(f"  [种子] {name}({code}): 获取{count}条数据")
-            except Exception as e:
-                print(f"  [种子] {name}({code}): 获取失败({e})，跳过")
+        if stock_count == 0:
+            for code, name in seed_stocks:
+                try:
+                    result = service.fetch_stock_data(code)
+                    count = result.get('price_count', 0)
+                    print(f"  [种子] {name}({code}): 获取{count}条数据")
+                except Exception as e:
+                    print(f"  [种子] {name}({code}): 获取失败({e})，跳过")
+        else:
+            print("  [种子] 已存在股票数据，跳过股票数据初始化")
 
         # 为admin用户创建2个Demo模型（状态为draft，引导用户自己训练）
         admin = db.query(User).filter(User.username == 'admin').first()
@@ -213,6 +213,87 @@ def _ensure_seed_data():
                     db.add(model)
                 db.commit()
                 print(f"  [种子] 已创建{len(demo_models)}个Demo模型")
+
+            # 初始化样例预测记录，让工作台首次进入即可展示预测结果和每日必看内容。
+            existing_predictions = db.query(PredictionShare).filter(
+                PredictionShare.user_id == admin.id,
+                PredictionShare.model_name.like('[Demo]%'),
+            ).count()
+            if existing_predictions == 0:
+                yesterday = datetime.now() - timedelta(days=1)
+                today = datetime.now()
+                demo_predictions = [
+                    PredictionShare(
+                        user_id=admin.id,
+                        model_id=None,
+                        model_name='[Demo] 银行股方向判断(XGBoost)',
+                        model_type='xgboost',
+                        stock_code='000001',
+                        stock_name='平安银行',
+                        target_type='next_day_direction',
+                        direction='up',
+                        prediction_value=0.63,
+                        confidence=0.72,
+                        predicted_change_pct=1.28,
+                        prediction_data={
+                            'prediction_label': 'up',
+                            'verified': True,
+                            'correct': True,
+                            'actual_direction': 'up',
+                            'actual_change_pct': 1.46,
+                            'demo': True,
+                        },
+                        is_published=False,
+                        created_at=yesterday,
+                    ),
+                    PredictionShare(
+                        user_id=admin.id,
+                        model_id=None,
+                        model_name='[Demo] 茅台趋势预测(LSTM)',
+                        model_type='lstm',
+                        stock_code='600519',
+                        stock_name='贵州茅台',
+                        target_type='next_day_return',
+                        direction='down',
+                        prediction_value=-0.006,
+                        confidence=0.58,
+                        predicted_change_pct=-0.62,
+                        prediction_data={
+                            'prediction_label': 'down',
+                            'verified': True,
+                            'correct': False,
+                            'actual_direction': 'up',
+                            'actual_change_pct': 0.34,
+                            'demo': True,
+                        },
+                        is_published=False,
+                        created_at=yesterday,
+                    ),
+                    PredictionShare(
+                        user_id=admin.id,
+                        model_id=None,
+                        model_name='[Demo] 银行股方向判断(XGBoost)',
+                        model_type='xgboost',
+                        stock_code='002594',
+                        stock_name='比亚迪',
+                        target_type='next_day_direction',
+                        direction='flat',
+                        prediction_value=0.51,
+                        confidence=0.43,
+                        predicted_change_pct=0.18,
+                        prediction_data={
+                            'prediction_label': 'flat',
+                            'verified': False,
+                            'demo': True,
+                        },
+                        is_published=False,
+                        created_at=today,
+                    ),
+                ]
+                for prediction in demo_predictions:
+                    db.add(prediction)
+                db.commit()
+                print(f"  [种子] 已创建{len(demo_predictions)}条样例预测记录")
 
         print("[OK] 种子数据初始化完成")
     except Exception as e:
